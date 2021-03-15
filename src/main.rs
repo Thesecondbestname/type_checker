@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 //! Implementation of "Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism"
 //! See: https://arxiv.org/abs/1306.6032
 //!
@@ -11,32 +13,39 @@ use std::fmt;
 
 ///Figure 6
 #[derive(Clone, Debug)]
-enum Expression {
-    Variable(String),
-    Literal(Literal),
-    Abstraction(String, Box<Expression>),
-    Application(Box<Expression>, Box<Expression>),
-    Let(String, Box<Expression>, Box<Expression>),
-    Annotation(Box<Expression>, Type),
-    Tuple(Box<Expression>, Box<Expression>),
+enum Expr {
+    /// Variable
+    Var(String),
+    /// Literal
+    Lit(Lit),
+    /// Abstraction
+    Abs(String, Box<Expr>),
+    /// Application
+    App(Box<Expr>, Box<Expr>),
+    /// Let expression
+    Let(String, Box<Expr>, Box<Expr>),
+    /// Type Annotation
+    Ann(Box<Expr>, Type),
+    /// Tuple
+    Tup(Box<Expr>, Box<Expr>),
 }
 
-impl fmt::Display for Expression {
+impl fmt::Display for Expr {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Expression::Literal(lit) => write!(f, "{}", lit),
-            Expression::Variable(var) => write!(f, "{}", var),
-            Expression::Abstraction(alpha, e) => write!(f, "(\\{} -> {})", alpha, e),
-            Expression::Application(e1, e2) => write!(f, "{} {}", e1, e2),
-            Expression::Let(var, expr, body) => write!(f, "let {} = {} in {}", var, expr, body),
-            Expression::Annotation(e, a) => write!(f, "({}: {})", e, a),
-            Expression::Tuple(fst, snd) => write!(f, "({}, {})", fst, snd),
+            Expr::Lit(l) => write!(f, "{}", l),
+            Expr::Var(x) => write!(f, "{}", x),
+            Expr::Abs(x, e) => write!(f, "(λ{}.{})", x, e),
+            Expr::App(e1, e2) => write!(f, "{} {}", e1, e2),
+            Expr::Let(x, e0, e1) => write!(f, "let {} = {} in {}", x, e0, e1),
+            Expr::Ann(e, t) => write!(f, "({}: {})", e, t),
+            Expr::Tup(e0, e1) => write!(f, "({}, {})", e0, e1),
         }
     }
 }
 
 #[derive(Clone, Debug)]
-enum Literal {
+enum Lit {
     Char(char),
     String(String),
     Int(isize),
@@ -45,45 +54,51 @@ enum Literal {
     Unit,
 }
 
-impl fmt::Display for Literal {
+impl fmt::Display for Lit {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Literal::Char(val) => write!(f, "'{}'", val),
-            Literal::String(val) => write!(f, "'{}'", val),
-            Literal::Int(val) => write!(f, "{}", val),
-            Literal::Float(val) => write!(f, "{}", val),
-            Literal::Bool(val) => write!(f, "{}", val),
-            Literal::Unit => write!(f, "()"),
+            Lit::Char(val) => write!(f, "'{}'", val),
+            Lit::String(val) => write!(f, "'{}'", val),
+            Lit::Int(val) => write!(f, "{}", val),
+            Lit::Float(val) => write!(f, "{}", val),
+            Lit::Bool(val) => write!(f, "{}", val),
+            Lit::Unit => write!(f, "()"),
         }
     }
 }
 
-///Figure 6
+/// Figure 6
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Type {
-    Literal(LiteralType),
-    Variable(String),
-    Existential(String),
-    Quantification(String, Box<Type>),
-    Function(Box<Type>, Box<Type>),
-    Product(Box<Type>, Box<Type>),
+    /// Literal type
+    Lit(LitType),
+    /// Type variable
+    Var(String),
+    /// Existential type
+    Exists(String),
+    /// Forall quantifier
+    Forall(String, Box<Type>),
+    /// Function type
+    Fun(Box<Type>, Box<Type>),
+    /// Tuple type
+    Tup(Box<Type>, Box<Type>),
 }
 
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Type::Literal(lit) => write!(f, "{}", lit),
-            Type::Variable(var) => write!(f, "{}", var),
-            Type::Existential(ex) => write!(f, "{}^", ex),
-            Type::Quantification(a, ty) => write!(f, "(∀{}. {})", a, ty),
-            Type::Function(a, c) => write!(f, "({} -> {})", a, c),
-            Type::Product(a, b) => write!(f, "{} × {}", a, b),
+            Type::Lit(lit) => write!(f, "{}", lit),
+            Type::Var(var) => write!(f, "{}", var),
+            Type::Exists(ex) => write!(f, "{}^", ex),
+            Type::Forall(a, ty) => write!(f, "(∀{}. {})", a, ty),
+            Type::Fun(a, c) => write!(f, "({} -> {})", a, c),
+            Type::Tup(a, b) => write!(f, "{} × {}", a, b),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum LiteralType {
+enum LitType {
     Unit,
     Char,
     String,
@@ -92,15 +107,15 @@ enum LiteralType {
     Bool,
 }
 
-impl fmt::Display for LiteralType {
+impl fmt::Display for LitType {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            LiteralType::Unit => write!(f, "()"),
-            LiteralType::Char => write!(f, "Char"),
-            LiteralType::String => write!(f, "String"),
-            LiteralType::Int => write!(f, "Int"),
-            LiteralType::Float => write!(f, "Float"),
-            LiteralType::Bool => write!(f, "Bool"),
+            LitType::Unit => write!(f, "()"),
+            LitType::Char => write!(f, "Char"),
+            LitType::String => write!(f, "String"),
+            LitType::Int => write!(f, "Int"),
+            LitType::Float => write!(f, "Float"),
+            LitType::Bool => write!(f, "Bool"),
         }
     }
 }
@@ -108,8 +123,8 @@ impl fmt::Display for LiteralType {
 impl Type {
     fn is_monotype(&self) -> bool {
         match self {
-            Type::Quantification(..) => false,
-            Type::Function(t1, t2) => t1.is_monotype() && t2.is_monotype(),
+            Type::Forall(..) => false,
+            Type::Fun(t1, t2) => t1.is_monotype() && t2.is_monotype(),
             _ => true,
         }
     }
@@ -117,27 +132,32 @@ impl Type {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ContextElement {
-    Variable(String),
-    Existential(String),
+    /// Variable
+    Var(String),
+    /// Existential type variable
+    Exists(String),
+    /// Solved type variable
     Solved(String, Type),
+    /// Marker type variable
     Marker(String),
-    TypedVariable(String, Type),
+    /// Typed term variable
+    TypedVar(String, Type),
 }
 
 impl fmt::Display for ContextElement {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            ContextElement::Variable(var) => write!(f, "{}", var),
-            ContextElement::Existential(ex) => write!(f, "{}^", ex),
+            ContextElement::Var(var) => write!(f, "{}", var),
+            ContextElement::Exists(ex) => write!(f, "{}^", ex),
             ContextElement::Solved(a, ty) => write!(f, "{}^: {}", a, ty),
             ContextElement::Marker(a) => write!(f, "<|{}", a),
-            ContextElement::TypedVariable(x, ty) => write!(f, "{}: {}", x, ty),
+            ContextElement::TypedVar(x, ty) => write!(f, "{}: {}", x, ty),
         }
     }
 }
 
 /// As the context needs to be ordered, it is implemented as a simple Vector.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Context {
     elements: Vec<ContextElement>,
 }
@@ -158,18 +178,14 @@ impl fmt::Display for Context {
 
 /// Context operations derive from "Hole notation" described in 3.1 and the fact that the context is ordered.
 impl Context {
-    fn initial() -> Self {
-        Context {
-            elements: Vec::new(),
-        }
-    }
-
+    /// Adds an element to the end of the context
     fn add(&self, element: ContextElement) -> Self {
         let mut eles = self.elements.clone();
         eles.push(element);
         Context { elements: eles }
     }
 
+    /// Splits a context at the index of an element, the element is included in the left-hand-side of the split
     fn split_at(&self, element: ContextElement) -> (Context, Context) {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
             let (lhs, rhs) = self.elements.split_at(index);
@@ -185,6 +201,7 @@ impl Context {
         panic!();
     }
 
+    /// Replaces `element` with `inserts`
     fn insert_in_place(&self, element: ContextElement, inserts: Vec<ContextElement>) -> Self {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
             let mut eles = self.elements.clone();
@@ -194,6 +211,7 @@ impl Context {
         panic!();
     }
 
+    /// Drops all elements after `element`
     fn drop(&self, element: ContextElement) -> Self {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
             let mut eles = self.elements.clone();
@@ -203,34 +221,38 @@ impl Context {
         panic!();
     }
 
-    fn get_solved(&self, alpha: &str) -> Option<&Type> {
-        for ele in &self.elements {
-            if let ContextElement::Solved(alpha1, tau) = ele {
-                if alpha == alpha1 {
-                    return Some(tau);
+    /// Returns `Some(Type)` if `a0` is solved, else `None`
+    fn get_solved(&self, a0: &str) -> Option<&Type> {
+        for elem in &self.elements {
+            if let ContextElement::Solved(a1, t) = elem {
+                if a0 == a1 {
+                    return Some(t);
                 }
             }
         }
         None
     }
 
-    fn has_existential(&self, alpha: &str) -> bool {
+    /// Returns `true` if `a` is an existential, else `false`
+    fn has_existential(&self, a: &str) -> bool {
         self.elements
             .iter()
-            .any(|ele| ele == &ContextElement::Existential(alpha.to_string()))
+            .any(|elem| elem == &ContextElement::Exists(a.to_string()))
     }
 
-    fn has_variable(&self, alpha: &str) -> bool {
+    /// Returns `true` if `a` is a variable, else `false`.
+    fn has_variable(&self, a: &str) -> bool {
         self.elements
             .iter()
-            .any(|ele| ele == &ContextElement::Variable(alpha.to_string()))
+            .any(|ele| ele == &ContextElement::Var(a.to_string()))
     }
 
-    fn get_annotation(&self, x: &str) -> Option<&Type> {
-        for ele in &self.elements {
-            if let ContextElement::TypedVariable(var, type_) = ele {
-                if var == x {
-                    return Some(type_);
+    /// Returns `Some(Type)` if `x` is a type annotation, else `None`
+    fn get_annotation(&self, x0: &str) -> Option<&Type> {
+        for elem in &self.elements {
+            if let ContextElement::TypedVar(x1, t) = elem {
+                if x0 == x1 {
+                    return Some(t);
                 }
             }
         }
@@ -241,16 +263,13 @@ impl Context {
 /// The state is used to generate new existentials.
 /// (In the paper mostly notated as α^ α1^ or β^)
 /// It is passed around mutably everywhere
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct State {
     existentials: usize,
 }
 
 impl State {
-    fn initial() -> State {
-        State { existentials: 0 }
-    }
-
+    /// Returns a fresh exitential
     fn fresh_existential(&mut self) -> String {
         let result = format!("t{}", self.existentials);
         self.existentials += 1;
@@ -258,220 +277,209 @@ impl State {
     }
 }
 
-fn literal_checks_against(literal: &Literal, type_: &LiteralType) -> bool {
-    match (literal, type_) {
-        (Literal::Char(_), LiteralType::Char) => true,
-        (Literal::String(_), LiteralType::String) => true,
-        (Literal::Int(_), LiteralType::Int) => true,
-        (Literal::Float(_), LiteralType::Float) => true,
-        (Literal::Bool(_), LiteralType::Bool) => true,
-        (Literal::Unit, LiteralType::Unit) => true,
+/// Returns `true` if literal expression checks against literal type, else `false`.
+fn literal_checks_against(e: &Lit, t: &LitType) -> bool {
+    match (e, t) {
+        (Lit::Char(_), LitType::Char) => true,
+        (Lit::String(_), LitType::String) => true,
+        (Lit::Int(_), LitType::Int) => true,
+        (Lit::Float(_), LitType::Float) => true,
+        (Lit::Bool(_), LitType::Bool) => true,
+        (Lit::Unit, LitType::Unit) => true,
         _ => false,
     }
 }
 
 /// Figure 11.
-fn checks_against(
-    state: &mut State,
-    context: &Context,
-    expr: &Expression,
-    type_: &Type,
-) -> Context {
-    print_helper("check", format!("{}", expr), format!("{}", type_), context);
-    assert!(is_well_formed(context, type_));
-    match (expr, type_) {
-        //1I
-        (Expression::Literal(lit), Type::Literal(lit_ty)) => {
+fn checks_against(state: &mut State, ctx0: &Context, e: &Expr, t: &Type) -> Context {
+    print_helper("check", format!("{}", e), format!("{}", t), ctx0);
+    assert!(is_well_formed(ctx0, t));
+    match (e, t) {
+        // 1I
+        (Expr::Lit(e), Type::Lit(t)) => {
             print_rule("1I");
-            assert!(literal_checks_against(lit, lit_ty));
-            context.clone()
+            assert!(literal_checks_against(e, t));
+            ctx0.clone()
         }
-        //->I
-        (Expression::Abstraction(x, e), Type::Function(a, b)) => {
+        // ->I
+        (Expr::Abs(x, e), Type::Fun(t0, t1)) => {
             print_rule("->I");
-            let typed_var = ContextElement::TypedVariable(x.clone(), *a.clone());
-            let gamma = context.add(typed_var.clone());
-            checks_against(state, &gamma, e, b).drop(typed_var)
+            let elem = ContextElement::TypedVar(x.clone(), *t0.clone());
+            let ctx1 = ctx0.add(elem.clone());
+            let ctx2 = checks_against(state, &ctx1, e, t1);
+            let ctx3 = ctx2.drop(elem);
+            ctx3
         }
-        //forallI
-        (_, Type::Quantification(alpha, a)) => {
+        // ∀I
+        (_, Type::Forall(a, t)) => {
             print_rule("∀I");
-            let var = ContextElement::Variable(alpha.clone());
-            let gamma = context.add(var.clone());
-            checks_against(state, &gamma, expr, a).drop(var)
+            let elem = ContextElement::Var(a.clone());
+            let ctx1 = ctx0.add(elem.clone());
+            let ctx2 = checks_against(state, &ctx1, e, t);
+            let ctx3 = ctx2.drop(elem);
+            ctx3
         }
-        //xI
-        (Expression::Tuple(fst, snd), Type::Product(a, b)) => {
+        // xI
+        (Expr::Tup(e0, e1), Type::Tup(t0, t1)) => {
             print_rule("xI");
-            let gamma = checks_against(state, context, fst, a);
-            checks_against(state, &gamma, snd, b)
+            let ctx1 = checks_against(state, ctx0, e0, t0);
+            let ctx2 = checks_against(state, &ctx1, e1, t1);
+            ctx2
         }
-        //Sub
+        // Sub
         (_, _) => {
             print_rule("Sub");
-            let (a, theta) = synthesizes_to(state, context, expr);
-            subtype(
-                state,
-                &theta,
-                &apply_context(a, &theta),
-                &apply_context(type_.clone(), &theta),
-            )
+            let (t1, ctx1) = synthesizes_to(state, ctx0, e);
+            let ctx2 = apply_context(t1, &ctx1);
+            let ctx3 = apply_context(t.clone(), &ctx1);
+            let ctx4 = subtype(state, &ctx1, &ctx2, &ctx3);
+            ctx4
         }
     }
 }
 
-fn literal_synthesizes_to(literal: &Literal) -> LiteralType {
-    match literal {
-        Literal::Char(_) => LiteralType::Char,
-        Literal::String(_) => LiteralType::String,
-        Literal::Int(_) => LiteralType::Int,
-        Literal::Float(_) => LiteralType::Float,
-        Literal::Bool(_) => LiteralType::Bool,
-        Literal::Unit => LiteralType::Unit,
+/// Synthesizes a type from a literal.
+fn literal_synthesizes_to(e: &Lit) -> LitType {
+    match e {
+        Lit::Char(_) => LitType::Char,
+        Lit::String(_) => LitType::String,
+        Lit::Int(_) => LitType::Int,
+        Lit::Float(_) => LitType::Float,
+        Lit::Bool(_) => LitType::Bool,
+        Lit::Unit => LitType::Unit,
     }
 }
 
 ///Figure 11
-fn synthesizes_to(state: &mut State, context: &Context, expr: &Expression) -> (Type, Context) {
-    print_helper("synth", format!("{}", expr), "".into(), context);
-    match expr {
-        //1I=>
-        Expression::Literal(lit) => {
+fn synthesizes_to(state: &mut State, ctx0: &Context, e: &Expr) -> (Type, Context) {
+    print_helper("synth", format!("{}", e), "".into(), ctx0);
+    match e {
+        // 1I=>
+        Expr::Lit(e) => {
             print_rule("1I=>");
-            (Type::Literal(literal_synthesizes_to(lit)), context.clone())
+            (Type::Lit(literal_synthesizes_to(e)), ctx0.clone())
         }
-        //Var
-        Expression::Variable(x) => {
+        // Var
+        Expr::Var(x) => {
             print_rule("Var");
-            if let Some(annotation) = context.get_annotation(x) {
-                return (annotation.clone(), context.clone());
+            if let Some(t) = ctx0.get_annotation(x) {
+                return (t.clone(), ctx0.clone());
             };
             panic!();
         }
-        //Anno
-        Expression::Annotation(e, annotation) => {
+        // Anno
+        Expr::Ann(e, t) => {
             print_rule("Anno");
-            if is_well_formed(context, annotation) {
-                let delta = checks_against(state, context, e, annotation);
-                return (annotation.clone(), delta);
+            if is_well_formed(ctx0, t) {
+                let ctx1 = checks_against(state, ctx0, e, t);
+                return (t.clone(), ctx1);
             }
             panic!();
         }
         //->I=>
-        Expression::Abstraction(x, e) => {
+        Expr::Abs(x, e) => {
             print_rule("->I=>");
-            let alpha = state.fresh_existential();
-            let beta = state.fresh_existential();
-            let gamma = context
-                .add(ContextElement::Existential(alpha.clone()))
-                .add(ContextElement::Existential(beta.clone()))
-                .add(ContextElement::TypedVariable(
+            let ex0 = state.fresh_existential();
+            let ex1 = state.fresh_existential();
+            let ctx1 = ctx0
+                .add(ContextElement::Exists(ex0.clone()))
+                .add(ContextElement::Exists(ex1.clone()))
+                .add(ContextElement::TypedVar(
                     x.clone(),
-                    Type::Existential(alpha.clone()),
+                    Type::Exists(ex0.clone()),
                 ));
-            let delta = checks_against(state, &gamma, e, &Type::Existential(beta.clone())).drop(
-                ContextElement::TypedVariable(x.clone(), Type::Existential(alpha.clone())),
+            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1.clone())).drop(
+                ContextElement::TypedVar(x.clone(), Type::Exists(ex0.clone())),
             );
             return (
-                Type::Function(
-                    Box::new(Type::Existential(alpha.clone())),
-                    Box::new(Type::Existential(beta.clone())),
+                Type::Fun(
+                    Type::Exists(ex0.clone()).into(),
+                    Type::Exists(ex1.clone()).into(),
                 ),
-                delta,
+                ctx2,
             );
         }
-        Expression::Tuple(fst, snd) => {
+        Expr::Tup(e0, e1) => {
             print_rule("SynthProduct");
-            let (a, gamma) = synthesizes_to(state, context, fst);
-            let (b, delta) = synthesizes_to(state, &gamma, snd);
-            return (Type::Product(a.into(), b.into()), delta);
+            let (t1, ctx1) = synthesizes_to(state, ctx0, e0);
+            let (t2, ctx2) = synthesizes_to(state, &ctx1, e1);
+            return (Type::Tup(t1.into(), t2.into()), ctx2);
         }
-        Expression::Let(var, expr, body) => {
+        Expr::Let(x, e0, e1) => {
             print_rule("Let");
-            let (t0, gamma) = synthesizes_to(state, context, expr);
-            let theta = gamma.add(ContextElement::TypedVariable(var.clone(), t0.clone()));
-
-            let (t1, delta) = synthesizes_to(state, &theta, body);
-            return (
-                t1,
-                delta.insert_in_place(ContextElement::TypedVariable(var.clone(), t0), vec![]),
-            );
+            let (t0, ctx1) = synthesizes_to(state, ctx0, e0);
+            let ctx2 = ctx1.add(ContextElement::TypedVar(x.clone(), t0.clone()));
+            let (t1, ctx3) = synthesizes_to(state, &ctx2, e1);
+            let ctx4 = ctx3.insert_in_place(ContextElement::TypedVar(x.clone(), t0), vec![]);
+            return (t1, ctx4);
         }
-
-        //->E
-        Expression::Application(e1, e2) => {
+        // ->E
+        Expr::App(e1, e2) => {
             print_rule("->E");
-            let (a, theta) = synthesizes_to(state, context, e1);
-            return application_synthesizes_to(state, &theta, &apply_context(a, &theta), e2);
+            let (t, ctx1) = synthesizes_to(state, ctx0, e1);
+            return application_synthesizes_to(state, &ctx1, &apply_context(t, &ctx1), e2);
         }
     }
 }
 
-//Figure 11
+/// Figure 11
 fn application_synthesizes_to(
     state: &mut State,
-    context: &Context,
-    type_: &Type,
-    expr: &Expression,
+    ctx0: &Context,
+    t: &Type,
+    e: &Expr,
 ) -> (Type, Context) {
-    print_helper(
-        "app_synth",
-        format!("{}", expr),
-        format!("{}", type_),
-        context,
-    );
-    match type_ {
-        //alphaApp
-        Type::Existential(alpha) => {
+    print_helper("app_synth", format!("{}", e), format!("{}", t), ctx0);
+    match t {
+        // α^App
+        Type::Exists(ex0) => {
             print_rule("α^App");
-            let alpha1 = state.fresh_existential();
-            let alpha2 = state.fresh_existential();
-            let gamma = context.insert_in_place(
-                ContextElement::Existential(alpha.to_string()),
+            let ex1 = state.fresh_existential();
+            let ex2 = state.fresh_existential();
+            let ctx1 = ctx0.insert_in_place(
+                ContextElement::Exists(ex0.to_string()),
                 vec![
-                    ContextElement::Existential(alpha2.clone()),
-                    ContextElement::Existential(alpha1.clone()),
+                    ContextElement::Exists(ex2.clone()),
+                    ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
-                        alpha.clone(),
-                        Type::Function(
-                            Box::new(Type::Existential(alpha1.clone())),
-                            Box::new(Type::Existential(alpha2.clone())),
+                        ex0.clone(),
+                        Type::Fun(
+                            Type::Exists(ex1.clone()).into(),
+                            Type::Exists(ex2.clone()).into(),
                         ),
                     ),
                 ],
             );
-            let delta = checks_against(state, &gamma, expr, &Type::Existential(alpha1.clone()));
-            return (Type::Existential(alpha2.clone()), delta);
+            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1.clone()));
+            return (Type::Exists(ex2.clone()), ctx2);
         }
-        //ForallApp
-        Type::Quantification(alpha, a) => {
+        // ∀App
+        Type::Forall(a0, t0) => {
             print_rule("∀App");
-            let alpha1 = state.fresh_existential();
-            let gamma = context.add(ContextElement::Existential(alpha1.clone()));
-            let substituted_a = substitution(a, alpha, &Type::Existential(alpha1));
-            return application_synthesizes_to(state, &gamma, &substituted_a, expr);
+            let ex0 = state.fresh_existential();
+            let ctx1 = ctx0.add(ContextElement::Exists(ex0.clone()));
+            let t1 = substitution(t0, a0, &Type::Exists(ex0));
+            return application_synthesizes_to(state, &ctx1, &t1, e);
         }
-        //App
-        Type::Function(a, c) => {
+        // App
+        Type::Fun(t0, t1) => {
             print_rule("->App");
-            let delta = checks_against(state, context, expr, a);
-            return (*c.clone(), delta);
+            let ctx1 = checks_against(state, ctx0, e, t0);
+            return (*t1.clone(), ctx1);
         }
         _ => panic!(),
     }
 }
 
 /// Figure 7
-fn is_well_formed(context: &Context, type_: &Type) -> bool {
-    match type_ {
-        Type::Literal(_) => true,
-        Type::Variable(var) => context.has_variable(var),
-        Type::Function(a, b) => is_well_formed(context, a) && is_well_formed(context, b),
-        Type::Quantification(alpha, a) => {
-            is_well_formed(&context.add(ContextElement::Variable(alpha.clone())), a)
-        }
-        Type::Existential(var) => context.has_existential(var) || context.get_solved(var).is_some(),
-        Type::Product(a, b) => is_well_formed(context, a) && is_well_formed(context, b),
+fn is_well_formed(ctx: &Context, t: &Type) -> bool {
+    match t {
+        Type::Lit(_) => true,
+        Type::Var(x) => ctx.has_variable(x),
+        Type::Fun(t0, t1) => is_well_formed(ctx, t0) && is_well_formed(ctx, t1),
+        Type::Forall(a, t) => is_well_formed(&ctx.add(ContextElement::Var(a.clone())), t),
+        Type::Exists(ex) => ctx.has_existential(ex) || ctx.get_solved(ex).is_some(),
+        Type::Tup(t0, t1) => is_well_formed(ctx, t0) && is_well_formed(ctx, t1),
     }
 }
 
@@ -480,168 +488,163 @@ fn is_well_formed(context: &Context, type_: &Type) -> bool {
 ///
 /// Alas, I could not find a definition of the FV function and had to copy the implementation of
 /// https://github.com/ollef/Bidirectional and https://github.com/atennapel/bidirectional.js
-fn occurs_in(alpha: &str, a: &Type) -> bool {
+fn occurs_in(x: &str, a: &Type) -> bool {
     match a {
-        Type::Literal(_) => false,
-        Type::Variable(var) => alpha == var,
-        Type::Function(t1, t2) => occurs_in(alpha, t1) || occurs_in(alpha, t2),
-        Type::Quantification(beta, t) => {
-            if alpha == beta {
+        Type::Lit(_) => false,
+        Type::Var(a) => x == a,
+        Type::Fun(t1, t2) => occurs_in(x, t1) || occurs_in(x, t2),
+        Type::Forall(a, t) => {
+            if x == a {
                 return true;
             } else {
-                return occurs_in(alpha, t);
+                return occurs_in(x, t);
             }
         }
-        Type::Existential(var) => alpha == var,
-        Type::Product(a, b) => occurs_in(alpha, a) || occurs_in(alpha, b),
+        Type::Exists(ex) => x == ex,
+        Type::Tup(t0, t1) => occurs_in(x, t0) || occurs_in(x, t1),
     }
 }
 
 /// Figure 9
-fn subtype(state: &mut State, context: &Context, a: &Type, b: &Type) -> Context {
-    print_helper("subtype", format!("{}", a), format!("{}", b), context);
-    assert!(is_well_formed(context, a));
-    assert!(is_well_formed(context, b));
-    match (a, b) {
-        //<:Unit
-        (Type::Literal(lit_a), Type::Literal(lit_b)) => {
+fn subtype(state: &mut State, ctx0: &Context, t0: &Type, t1: &Type) -> Context {
+    print_helper("subtype", format!("{}", t0), format!("{}", t1), ctx0);
+    assert!(is_well_formed(ctx0, t0));
+    assert!(is_well_formed(ctx0, t1));
+    match (t0, t1) {
+        // <:Unit
+        (Type::Lit(t0), Type::Lit(t1)) => {
             print_rule("<:Unit");
-            assert_eq!(lit_a, lit_b);
-            context.clone()
+            assert_eq!(t0, t1);
+            ctx0.clone()
         }
-        //<:Var
-        (Type::Variable(alpha1), Type::Variable(alpha2)) => {
+        // <:Var
+        (Type::Var(a0), Type::Var(a1)) => {
             print_rule("<:Var");
-            if is_well_formed(context, a) && alpha1 == alpha2 {
-                return context.clone();
+            if is_well_formed(ctx0, t0) && a0 == a1 {
+                return ctx0.clone();
             } else {
                 panic!();
             }
         }
-        //<:Exvar
-        (Type::Existential(exist1), Type::Existential(exist2)) if exist1 == exist2 => {
+        // <:Exvar
+        (Type::Exists(ex0), Type::Exists(ex1)) if ex0 == ex1 => {
             print_rule("<:Exvar");
-            if is_well_formed(context, a) {
-                return context.clone();
+            if is_well_formed(ctx0, t0) {
+                return ctx0.clone();
             } else {
                 panic!();
             }
         }
-        //<:->
-        (Type::Function(a1, a2), Type::Function(b1, b2)) => {
+        // <:->
+        (Type::Fun(ta1, ta2), Type::Fun(tb1, tb2)) => {
             print_rule("<:->");
-            let theta = subtype(state, context, a1, b1);
+            let ctx1 = subtype(state, ctx0, tb1, ta1);
             return subtype(
                 state,
-                &theta,
-                &apply_context(*a2.clone(), &theta),
-                &apply_context(*b2.clone(), &theta),
+                &ctx1,
+                &apply_context(*ta2.clone(), &ctx1),
+                &apply_context(*tb2.clone(), &ctx1),
             );
         }
-        (Type::Product(a1, b1), Type::Product(a2, b2)) => {
+        (Type::Tup(ta1, ta2), Type::Tup(tb1, tb2)) => {
             print_rule("SubProduct");
-            let gamma = subtype(state, context, a1, a2);
-            subtype(state, &gamma, b1, b2)
+            let ctx1 = subtype(state, ctx0, ta1, tb1);
+            let ctx2 = subtype(state, &ctx1, ta2, tb2);
+            ctx2
         }
-        //<:forallL
-        (Type::Quantification(alpha, a), _) => {
+        // <:∀L
+        (Type::Forall(a, t2), _) => {
             print_rule("<:∀L");
-            let r1 = state.fresh_existential();
-            let gamma = context
-                .add(ContextElement::Marker(r1.clone()))
-                .add(ContextElement::Existential(r1.clone()));
-            let substituted_a = substitution(a, alpha, &Type::Existential(r1.clone()));
-            let delta = subtype(state, &gamma, &substituted_a, b);
-            return delta.drop(ContextElement::Marker(r1.clone()));
+            let ex0 = state.fresh_existential();
+            let ctx1 = ctx0
+                .add(ContextElement::Marker(ex0.clone()))
+                .add(ContextElement::Exists(ex0.clone()));
+            let t3 = substitution(t2, a, &Type::Exists(ex0.clone()));
+            let ctx2 = subtype(state, &ctx1, &t3, t1);
+            return ctx2.drop(ContextElement::Marker(ex0.clone()));
         }
-        //<:forallR
-        (_, Type::Quantification(alpha, b)) => {
+        // <:∀R
+        (_, Type::Forall(a, t2)) => {
             print_rule("<:∀R");
-            let theta = context.add(ContextElement::Variable(alpha.clone()));
-            let delta = subtype(state, &theta, a, b);
-            return delta.drop(ContextElement::Variable(alpha.clone()));
+            let ctx1 = ctx0.add(ContextElement::Var(a.clone()));
+            let ctx2 = subtype(state, &ctx1, t0, t2);
+            return ctx2.drop(ContextElement::Var(a.clone()));
         }
-        //<:InstatiateL
-        (Type::Existential(alpha), _) => {
+        // <:InstatiateL
+        (Type::Exists(ex0), _) => {
             print_rule("<:InstantiateL");
-            if !occurs_in(alpha, b) {
-                instantiate_l(state, context, alpha, b)
+            if !occurs_in(ex0, t1) {
+                instantiate_l(state, ctx0, ex0, t1)
             } else {
                 panic!("Circular!");
             }
         }
-        //<:InstantiateR
-        (_, Type::Existential(alpha)) => {
+        // <:InstantiateR
+        (_, Type::Exists(ex0)) => {
             print_rule("<:InstantiateR");
-            if !occurs_in(alpha, a) {
-                instantiate_r(state, context, a, alpha)
+            if !occurs_in(ex0, t0) {
+                instantiate_r(state, ctx0, t0, ex0)
             } else {
                 panic!("Circular!");
             }
         }
-        _ => {
-            panic!("Couldn't subtype!");
-        }
+        _ => panic!("Couldn't subtype!"),
     }
 }
 
 /// Figure 10
-fn instantiate_l(state: &mut State, context: &Context, alpha: &str, b: &Type) -> Context {
-    print_helper("instantiate_l", alpha.into(), format!("{}", b), context);
-    let (left_context, right_context) =
-        context.split_at(ContextElement::Existential(alpha.to_string()));
-
-    //InstLSolve
-    if b.is_monotype() && is_well_formed(&left_context, b) {
-        print_rule("InstLSolve");
-        return context.insert_in_place(
-            ContextElement::Existential(alpha.to_string()),
-            vec![ContextElement::Solved(alpha.into(), b.clone())],
-        );
-    }
-    match b {
-        //InstLArr
-        Type::Function(a1, a2) => {
+fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Context {
+    print_helper("instantiate_l", ex0.into(), format!("{}", t), ctx0);
+    match t {
+        // InstLSolve
+        t if {
+            let (ctx1, _) = ctx0.split_at(ContextElement::Exists(ex0.to_string()));
+            t.is_monotype() && is_well_formed(&ctx1, t)
+        } =>
+        {
+            print_rule("InstLSolve");
+            return ctx0.insert_in_place(
+                ContextElement::Exists(ex0.to_string()),
+                vec![ContextElement::Solved(ex0.into(), t.clone())],
+            );
+        }
+        // InstLArr
+        Type::Fun(t1, t2) => {
             print_rule("InstLArr");
-            let alpha1 = state.fresh_existential();
-            let alpha2 = state.fresh_existential();
-            let gamma = context.insert_in_place(
-                ContextElement::Existential(alpha.to_string()),
+            let ex1 = state.fresh_existential();
+            let ex2 = state.fresh_existential();
+            let ctx1 = ctx0.insert_in_place(
+                ContextElement::Exists(ex0.to_string()),
                 vec![
-                    ContextElement::Existential(alpha2.clone()),
-                    ContextElement::Existential(alpha1.clone()),
+                    ContextElement::Exists(ex2.clone()),
+                    ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
-                        alpha.into(),
-                        Type::Function(
-                            Box::new(Type::Existential(alpha1.clone())),
-                            Box::new(Type::Existential(alpha2.clone())),
+                        ex0.into(),
+                        Type::Fun(
+                            Type::Exists(ex1.clone()).into(),
+                            Type::Exists(ex2.clone()).into(),
                         ),
                     ),
                 ],
             );
-            let theta = instantiate_r(state, &gamma, a1, &alpha1);
-            let delta = instantiate_l(state, &theta, &alpha2, &apply_context(*a2.clone(), &theta));
-            return delta;
+            let ctx2 = instantiate_r(state, &ctx1, t1, &ex1);
+            let ctx3 = instantiate_l(state, &ctx2, &ex2, &apply_context(*t2.clone(), &ctx2));
+            return ctx3;
         }
-        //InstAIIR
-        Type::Quantification(beta, b) => {
+        // InstAIIR
+        Type::Forall(a, t1) => {
             print_rule("InstLAllR");
-            let delta = instantiate_l(
-                state,
-                &context.add(ContextElement::Variable(beta.clone())),
-                alpha,
-                b,
-            );
-            return delta.drop(ContextElement::Variable(beta.clone()));
+            let ctx1 = instantiate_l(state, &ctx0.add(ContextElement::Var(a.clone())), ex0, t1);
+            return ctx1.drop(ContextElement::Var(a.clone()));
         }
-        //InstLReach
-        Type::Existential(beta) => {
+        // InstLReach
+        Type::Exists(ex1) => {
             print_rule("InstLReach");
-            return context.insert_in_place(
-                ContextElement::Existential(beta.clone()),
+            return ctx0.insert_in_place(
+                ContextElement::Exists(ex1.clone()),
                 vec![ContextElement::Solved(
-                    beta.clone(),
-                    Type::Existential(alpha.into()),
+                    ex1.clone(),
+                    Type::Exists(ex0.into()),
                 )],
             );
         }
@@ -650,88 +653,89 @@ fn instantiate_l(state: &mut State, context: &Context, alpha: &str, b: &Type) ->
 }
 
 /// Figure 10
-fn instantiate_r(state: &mut State, context: &Context, a: &Type, alpha: &str) -> Context {
-    print_helper("instantiate_r", format!("{}", a), alpha.into(), context);
-    let (left_context, right_context) =
-        context.split_at(ContextElement::Existential(alpha.to_string()));
-
-    //InstRSolve
-    if a.is_monotype() && is_well_formed(&left_context, a) {
-        return context.insert_in_place(
-            ContextElement::Existential(alpha.into()),
-            vec![ContextElement::Solved(alpha.into(), a.clone())],
-        );
-    }
-    match a {
-        //InstRArr
-        Type::Function(a1, a2) => {
+fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Context {
+    print_helper("instantiate_r", format!("{}", t), ex0.into(), ctx0);
+    match t {
+        // InstRSolve
+        t if {
+            let (ctx1, _) = ctx0.split_at(ContextElement::Exists(ex0.to_string()));
+            t.is_monotype() && is_well_formed(&ctx1, t)
+        } =>
+        {
+            return ctx0.insert_in_place(
+                ContextElement::Exists(ex0.into()),
+                vec![ContextElement::Solved(ex0.into(), t.clone())],
+            );
+        }
+        // InstRArr
+        Type::Fun(t0, t1) => {
             print_rule("InstRArr");
-            let alpha1 = state.fresh_existential();
-            let alpha2 = state.fresh_existential();
-            let gamma = context.insert_in_place(
-                ContextElement::Existential(alpha.into()),
+            let ex1 = state.fresh_existential();
+            let ex2 = state.fresh_existential();
+            let ctx1 = ctx0.insert_in_place(
+                ContextElement::Exists(ex0.into()),
                 vec![
-                    ContextElement::Existential(alpha2.clone()),
-                    ContextElement::Existential(alpha1.clone()),
+                    ContextElement::Exists(ex2.clone()),
+                    ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
-                        alpha.into(),
-                        Type::Function(
-                            Box::new(Type::Existential(alpha1.clone())),
-                            Box::new(Type::Existential(alpha2.clone())),
+                        ex0.into(),
+                        Type::Fun(
+                            Type::Exists(ex1.clone()).into(),
+                            Type::Exists(ex2.clone()).into(),
                         ),
                     ),
                 ],
             );
-            let theta = instantiate_l(state, &gamma, &alpha1, a1);
-            let delta = instantiate_r(state, &theta, &apply_context(*a2.clone(), &theta), &alpha2);
-            return delta;
+            let ctx2 = instantiate_l(state, &ctx1, &ex1, t0);
+            let ctx3 = instantiate_r(state, &ctx2, &apply_context(*t1.clone(), &ctx2), &ex2);
+            return ctx3;
         }
-        //InstRAllL
-        Type::Quantification(beta, b) => {
+        // InstRAllL
+        Type::Forall(a, t1) => {
             print_rule("InstRAllL");
-            let beta1 = state.fresh_existential();
-            let gamma = context
-                .add(ContextElement::Marker(beta1.clone()))
-                .add(ContextElement::Existential(beta1.clone()));
-            let delta = instantiate_r(
+            let ex1 = state.fresh_existential();
+            let ctx1 = ctx0
+                .add(ContextElement::Marker(ex1.clone()))
+                .add(ContextElement::Exists(ex1.clone()));
+            let ctx2 = instantiate_r(
                 state,
-                &gamma,
-                &substitution(b, beta, &Type::Existential(beta1.clone())),
-                alpha,
+                &ctx1,
+                &substitution(t1, a, &Type::Exists(ex1.clone())),
+                ex0,
             );
 
-            return delta.drop(ContextElement::Marker(beta1.clone()));
+            return ctx2.drop(ContextElement::Marker(ex1.clone()));
         }
-        Type::Product(a, b) => {
+        Type::Tup(t0, t1) => {
             print_rule("InstRProd");
-            let alpha1 = state.fresh_existential();
-            let beta1 = state.fresh_existential();
-            let gamma = context.insert_in_place(
-                ContextElement::Existential(alpha.into()),
+            let ex1 = state.fresh_existential();
+            let ex2 = state.fresh_existential();
+            let ctx1 = ctx0.insert_in_place(
+                ContextElement::Exists(ex0.into()),
                 vec![
-                    ContextElement::Existential(beta1.clone()),
-                    ContextElement::Existential(alpha1.clone()),
+                    ContextElement::Exists(ex2.clone()),
+                    ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
-                        alpha.into(),
-                        Type::Product(
-                            Box::new(Type::Existential(alpha1.clone())),
-                            Box::new(Type::Existential(beta1.clone())),
+                        ex0.into(),
+                        Type::Tup(
+                            Type::Exists(ex1.clone()).into(),
+                            Type::Exists(ex2.clone()).into(),
                         ),
                     ),
                 ],
             );
-            let theta = instantiate_l(state, &gamma, &alpha1, a);
-            let delta = instantiate_r(state, &theta, &apply_context(*b.clone(), &theta), &beta1);
-            return delta;
+            let ctx2 = instantiate_l(state, &ctx1, &ex1, t0);
+            let ctx3 = instantiate_r(state, &ctx2, &apply_context(*t1.clone(), &ctx2), &ex2);
+            return ctx3;
         }
-        //InstRReach
-        Type::Existential(beta) => {
+        // InstRReach
+        Type::Exists(ex1) => {
             print_rule("InstRReach");
-            return context.insert_in_place(
-                ContextElement::Existential(beta.clone()),
+            return ctx0.insert_in_place(
+                ContextElement::Exists(ex1.clone()),
                 vec![ContextElement::Solved(
-                    beta.clone(),
-                    Type::Existential(alpha.into()),
+                    ex1.clone(),
+                    Type::Exists(ex0.into()),
                 )],
             );
         }
@@ -740,27 +744,25 @@ fn instantiate_r(state: &mut State, context: &Context, a: &Type, alpha: &str) ->
 }
 
 /// Figure 8
-fn apply_context(a: Type, context: &Context) -> Type {
-    match a {
-        Type::Literal(_) => a,
-        Type::Variable(_) => a,
-        Type::Existential(ref alpha) => {
-            if let Some(tau) = context.get_solved(alpha) {
-                apply_context(tau.clone(), context)
+fn apply_context(t0: Type, ctx: &Context) -> Type {
+    match t0 {
+        Type::Var(_) => t0,
+        Type::Lit(_) => t0,
+        Type::Exists(ref ex) => {
+            if let Some(t1) = ctx.get_solved(ex) {
+                apply_context(t1.clone(), ctx)
             } else {
-                a
+                t0
             }
         }
-        Type::Function(a, b) => Type::Function(
-            Box::new(apply_context(*a, context)),
-            Box::new(apply_context(*b, context)),
+        Type::Fun(t1, t2) => Type::Fun(
+            apply_context(*t1, ctx).into(),
+            apply_context(*t2, ctx).into(),
         ),
-        Type::Quantification(alpha, a) => {
-            Type::Quantification(alpha, Box::new(apply_context(*a, context)))
-        }
-        Type::Product(a, b) => Type::Product(
-            apply_context(*a, context).into(),
-            apply_context(*b, context).into(),
+        Type::Forall(a, t1) => Type::Forall(a, apply_context(*t1, ctx).into()),
+        Type::Tup(t1, t2) => Type::Tup(
+            apply_context(*t1, ctx).into(),
+            apply_context(*t2, ctx).into(),
         ),
     }
 }
@@ -770,50 +772,39 @@ fn apply_context(a: Type, context: &Context) -> Type {
 /// https://github.com/ollef/Bidirectional and https://github.com/atennapel/bidirectional.js
 ///
 /// Substitution is written in the paper as [α^/α]A which means, α is replaced with α^ in all occurrences in A
-fn substitution(a: &Type, alpha: &str, b: &Type) -> Type {
-    match a {
-        Type::Literal(_) => a.clone(),
-        Type::Variable(var) => {
-            if var == alpha {
-                b.clone()
+fn substitution(t: &Type, xr: &str, tr: &Type) -> Type {
+    match t {
+        Type::Lit(_) => t.clone(),
+        Type::Var(x) => {
+            if xr == x {
+                tr.clone()
             } else {
-                a.clone()
+                t.clone()
             }
         }
-        Type::Quantification(var, type_) => {
-            if var == alpha {
-                Type::Quantification(var.clone(), Box::new(b.clone()))
+        Type::Forall(a, t2) => {
+            if xr == a {
+                Type::Forall(a.clone(), tr.clone().into())
             } else {
-                Type::Quantification(var.clone(), Box::new(substitution(type_, alpha, b)))
+                Type::Forall(a.clone(), substitution(t2, xr, tr).into())
             }
         }
-        Type::Existential(var) => {
-            if var == alpha {
-                b.clone()
+        Type::Exists(ex) => {
+            if ex == xr {
+                tr.clone()
             } else {
-                a.clone()
+                t.clone()
             }
         }
-        Type::Product(t1, t2) => Type::Product(
-            substitution(t1, alpha, b).into(),
-            substitution(t2, alpha, b).into(),
+        Type::Tup(t0, t1) => Type::Tup(
+            substitution(t0, xr, tr).into(),
+            substitution(t1, xr, tr).into(),
         ),
-        Type::Function(t1, t2) => Type::Function(
-            Box::new(substitution(t1, alpha, b)),
-            Box::new(substitution(t2, alpha, b)),
+        Type::Fun(t1, t2) => Type::Fun(
+            substitution(t1, xr, tr).into(),
+            substitution(t2, xr, tr).into(),
         ),
     }
-}
-
-fn synth(expression: Expression) -> Type {
-    let (t, c) = synthesizes_to(&mut State::initial(), &Context::initial(), &expression);
-    println!("-------------------RESULTS-------------------");
-    println!("{} in context {}", t, c);
-    let t = apply_context(t, &c);
-    println!("Applied: {}", t);
-    // println!("{}", expression);
-    println!("-------------------");
-    t
 }
 
 fn print_helper(fun: &str, c1: String, c2: String, context: &Context) {
@@ -830,217 +821,191 @@ fn print_rule(rule: &str) {
     println!("{:>20}", rule);
 }
 
-fn literal_string() -> Expression {
-    Expression::Literal(Literal::String("Test".into()))
-}
-
-fn literal_bool() -> Expression {
-    Expression::Literal(Literal::Bool(true))
-}
-
+/// "Test": String
 #[test]
 fn basic() {
-    assert_eq!(synth(literal_string()), Type::Literal(LiteralType::String));
+    assert_eq!(lit_str().synth(), Type::Lit(LitType::String));
 }
 
+/// (λx.x) "Test": String
 #[test]
 fn application_string() {
-    assert_eq!(
-        synth(Expression::Application(
-            Expression::Abstraction("x".into(), Expression::Variable("x".into()).into(),).into(),
-            literal_string().into(),
-        )),
-        Type::Literal(LiteralType::String)
-    );
+    assert_eq!(app(abs("x", var("x")), lit_str()).synth(), ty_str());
 }
 
+/// (λx.x) true: bool
 #[test]
 fn application_bool() {
-    assert_eq!(
-        synth(Expression::Application(
-            Expression::Abstraction("x".into(), Expression::Variable("x".into()).into(),).into(),
-            literal_bool().into(),
-        )),
-        Type::Literal(LiteralType::Bool)
-    );
+    assert_eq!(app(abs("x", var("x")), lit_bool()).synth(), ty_bool());
 }
 
+/// λx.x: 't0->'t0
 #[test]
 fn lambda() {
     assert_eq!(
-        synth(Expression::Abstraction(
-            "x".into(),
-            Expression::Variable("x".into()).into()
-        )),
-        Type::Function(
-            Type::Existential("t0".into()).into(),
-            Type::Existential("t0".into()).into()
-        )
+        abs("x", var("x")).synth(),
+        ty_fun(ty_existential("t0"), ty_existential("t0"))
     );
 }
 
+/// (λx.x) "Test": String
 #[test]
 fn idunit() {
-    assert_eq!(
-        synth(Expression::Application(
-            id_fn().into(),
-            literal_string().into()
-        )),
-        Type::Literal(LiteralType::String)
-    )
+    assert_eq!(app(id(), lit_str()).synth(), ty_str())
 }
 
+/// ("Test" × true): (String × Bool)
 #[test]
 fn tuples() {
     assert_eq!(
-        synth(Expression::Tuple(
-            literal_string().into(),
-            literal_bool().into()
-        )),
-        Type::Product(
-            Type::Literal(LiteralType::String).into(),
-            Type::Literal(LiteralType::Bool).into()
-        )
+        tuple(lit_str(), lit_bool()).synth(),
+        ty_tuple(ty_str(), ty_bool())
     )
 }
 
+/// (λx.(x × x)) "Test": (String × String)
 #[test]
 fn tuples_in_lambda() {
     assert_eq!(
-        synth(construct_app(
-            Expression::Abstraction(
-                "x".into(),
-                Expression::Tuple(
-                    Expression::Variable("x".into()).into(),
-                    Expression::Variable("x".into()).into()
-                )
-                .into()
-            ),
-            literal_string()
-        )),
-        Type::Product(
-            Type::Literal(LiteralType::String).into(),
-            Type::Literal(LiteralType::String).into(),
-        )
+        app(abs("x", tuple(var("x"), var("x"))), lit_str()).synth(),
+        ty_tuple(ty_str(), ty_str())
     )
 }
 
+/// ((λx.(x × (x × x))) "Test"): (String × (String × String))
 #[test]
 fn nested_tuples() {
     assert_eq!(
-        synth(construct_app(
-            Expression::Abstraction(
-                "x".into(),
-                Expression::Tuple(
-                    Expression::Variable("x".into()).into(),
-                    Expression::Tuple(
-                        Expression::Variable("x".into()).into(),
-                        Expression::Variable("x".into()).into()
-                    )
-                    .into()
-                )
-                .into()
-            ),
-            literal_string()
-        )),
-        Type::Product(
-            Type::Literal(LiteralType::String).into(),
-            Type::Product(
-                Type::Literal(LiteralType::String).into(),
-                Type::Literal(LiteralType::String).into()
-            )
-            .into()
+        app(
+            abs("x", tuple(var("x"), tuple(var("x"), var("x")))),
+            lit_str()
         )
+        .synth(),
+        ty_tuple(ty_str(), ty_tuple(ty_str(), ty_str()))
     )
 }
 
+/// ((λx.x) ("Test" × true)): (String × bool)
 #[test]
 fn tuples_in_fn() {
     assert_eq!(
-        synth(Expression::Application(
-            id_fn().into(),
-            Expression::Tuple(literal_string().into(), literal_bool().into()).into()
-        )),
-        Type::Product(
-            Type::Literal(LiteralType::String).into(),
-            Type::Literal(LiteralType::Bool).into()
-        )
+        app(id(), tuple(lit_str(), lit_bool())).synth(),
+        ty_tuple(ty_str(), ty_bool())
     )
 }
 
+/// (let newid = λx.x in ((newid "Test") × (newid true))): (String × bool)
 #[test]
 fn generalised_let() {
     assert_eq!(
-        synth(construct_let(
+        let_in(
             "newid",
-            id_fn().into(),
-            //Without annotation, e.g.
-            //Expression::Abstraction("x".into(), Expression::Variable("x".into()).into(),).into(),
-            //It fails.
-            Expression::Tuple(
-                construct_app(
-                    Expression::Variable("newid".into()),
-                    literal_string().into()
-                )
-                .into(),
-                construct_app(Expression::Variable("newid".into()), literal_bool().into()).into()
-            )
-        )),
-        Type::Product(
-            Type::Literal(LiteralType::String).into(),
-            Type::Literal(LiteralType::Bool).into()
+            id(),
+            // Without annotation, e.g. abs("x", var("x")) It fails.
+            tuple(app(var("newid"), lit_str()), app(var("newid"), lit_bool()))
         )
+        .synth(),
+        ty_tuple(ty_str(), ty_bool())
     )
 }
 
+/// (let a = true in id a): bool
 #[test]
 fn let_binding() {
     assert_eq!(
-        synth(Expression::Let(
-            "a".into(),
-            literal_bool().into(),
-            Expression::Application(id_fn().into(), Expression::Variable("a".into()).into()).into()
-        )),
-        Type::Literal(LiteralType::Bool)
+        let_in("a", lit_bool(), app(id(), var("a"))).synth(),
+        ty_bool()
     )
 }
 
+/// ((let newid = λx.x in newid) "Test"): String
 #[test]
 fn let_fn() {
     assert_eq!(
-        synth(construct_app(
-            construct_let(
-                "newid",
-                Expression::Abstraction("x".into(), Expression::Variable("x".into()).into(),)
-                    .into(),
-                Expression::Variable("newid".into())
-            ),
-            literal_string().into()
-        )),
-        Type::Literal(LiteralType::String)
+        app(let_in("newid", abs("x", var("x")), var("newid")), lit_str()).synth(),
+        ty_str()
     );
 }
 
-fn construct_app(e0: Expression, e1: Expression) -> Expression {
-    Expression::Application(e0.into(), e1.into())
+fn app(e0: Expr, e1: Expr) -> Expr {
+    Expr::App(e0.into(), e1.into())
 }
 
-fn construct_let(var: &str, e0: Expression, body: Expression) -> Expression {
-    Expression::Let(var.into(), e0.into(), body.into())
+fn let_in(x: &str, e0: Expr, e1: Expr) -> Expr {
+    Expr::Let(x.into(), e0.into(), e1.into())
 }
 
-fn id_fn() -> Expression {
-    Expression::Annotation(
-        Expression::Abstraction("x".into(), Expression::Variable("x".into()).into()).into(),
-        Type::Quantification(
-            "t".into(),
-            Type::Function(
-                Type::Variable("t".into()).into(),
-                Type::Variable("t".into()).into(),
-            )
-            .into(),
-        ),
+fn abs(x: &str, e: Expr) -> Expr {
+    Expr::Abs(x.into(), e.into())
+}
+
+fn var(x: &str) -> Expr {
+    Expr::Var(x.into())
+}
+
+/// (λx.x): ∀t.t->t
+fn id() -> Expr {
+    ann(
+        abs("x", var("x")),
+        ty_forall("t", ty_fun(ty_var("t"), ty_var("t"))),
     )
+}
+
+fn lit_str() -> Expr {
+    Expr::Lit(Lit::String("Test".into()))
+}
+
+fn lit_bool() -> Expr {
+    Expr::Lit(Lit::Bool(true))
+}
+
+fn tuple(e0: Expr, e1: Expr) -> Expr {
+    Expr::Tup(e0.into(), e1.into())
+}
+
+fn ann(e: Expr, t: Type) -> Expr {
+    Expr::Ann(e.into(), t.into())
+}
+
+fn ty_str() -> Type {
+    Type::Lit(LitType::String)
+}
+
+fn ty_bool() -> Type {
+    Type::Lit(LitType::Bool)
+}
+
+fn ty_tuple(t0: Type, t1: Type) -> Type {
+    Type::Tup(t0.into(), t1.into())
+}
+
+fn ty_fun(t0: Type, t1: Type) -> Type {
+    Type::Fun(t0.into(), t1.into())
+}
+
+fn ty_existential(ex: &str) -> Type {
+    Type::Exists(ex.into())
+}
+
+fn ty_var(x: &str) -> Type {
+    Type::Var(x.into())
+}
+
+fn ty_forall(x: &str, t: Type) -> Type {
+    Type::Forall(x.into(), t.into())
+}
+
+impl Expr {
+    fn synth(self) -> Type {
+        let (t, ctx) = synthesizes_to(&mut State::default(), &Context::default(), &self);
+        println!("-------------------RESULTS-------------------");
+        println!("{} in context {}", t, ctx);
+        let t = apply_context(t, &ctx);
+        println!("Applied: {}", t);
+        // println!("{}", expression);
+        println!("-------------------");
+        t
+    }
 }
 
 fn main() {}
