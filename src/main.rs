@@ -9,6 +9,8 @@
 //!
 //! This is an extended version. Check out original.rs for the original implementation.
 
+use im_rc::vector;
+use im_rc::Vector;
 use std::fmt;
 
 ///Figure 6
@@ -159,7 +161,7 @@ impl fmt::Display for ContextElement {
 /// As the context needs to be ordered, it is implemented as a simple Vector.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 struct Context {
-    elements: Vec<ContextElement>,
+    elements: Vector<ContextElement>,
 }
 
 impl fmt::Display for Context {
@@ -181,20 +183,16 @@ impl Context {
     /// Adds an element to the end of the context
     fn add(&self, element: ContextElement) -> Self {
         let mut eles = self.elements.clone();
-        eles.push(element);
+        eles.push_back(element);
         Context { elements: eles }
     }
 
     /// Splits a context at the index of an element, the element is included in the left-hand-side of the split
     fn split_at(&self, element: ContextElement) -> (Context, Context) {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
-            let (lhs, rhs) = self.elements.split_at(index);
-            let left_context = Context {
-                elements: lhs.to_vec(),
-            };
-            let right_context = Context {
-                elements: rhs.to_vec(),
-            };
+            let (lhs, rhs) = self.elements.clone().split_at(index);
+            let left_context = Context { elements: lhs };
+            let right_context = Context { elements: rhs };
 
             return (left_context, right_context);
         }
@@ -202,11 +200,12 @@ impl Context {
     }
 
     /// Replaces `element` with `inserts`
-    fn insert_in_place(&self, element: ContextElement, inserts: Vec<ContextElement>) -> Self {
+    fn insert_in_place(&self, element: ContextElement, inserts: Vector<ContextElement>) -> Self {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
-            let mut eles = self.elements.clone();
-            let _ = eles.splice(index..=index, inserts).count();
-            return Context { elements: eles };
+            let (mut lhs, rhs) = self.elements.clone().split_at(index + 1);
+            lhs.append(inserts);
+            lhs.append(rhs);
+            return Context { elements: lhs };
         }
         panic!();
     }
@@ -410,7 +409,7 @@ fn synthesizes_to(state: &mut State, ctx0: &Context, e: &Expr) -> (Type, Context
             let (t0, ctx1) = synthesizes_to(state, ctx0, e0);
             let ctx2 = ctx1.add(ContextElement::TypedVar(x.clone(), t0.clone()));
             let (t1, ctx3) = synthesizes_to(state, &ctx2, e1);
-            let ctx4 = ctx3.insert_in_place(ContextElement::TypedVar(x.clone(), t0), vec![]);
+            let ctx4 = ctx3.insert_in_place(ContextElement::TypedVar(x.clone(), t0), vector![]);
             return (t1, ctx4);
         }
         // ->E
@@ -438,7 +437,7 @@ fn application_synthesizes_to(
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
                 ContextElement::Exists(ex0.to_string()),
-                vec![
+                vector![
                     ContextElement::Exists(ex2.clone()),
                     ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
@@ -605,7 +604,7 @@ fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Cont
             print_rule("InstLSolve");
             return ctx0.insert_in_place(
                 ContextElement::Exists(ex0.to_string()),
-                vec![ContextElement::Solved(ex0.into(), t.clone())],
+                vector![ContextElement::Solved(ex0.into(), t.clone())],
             );
         }
         // InstLArr
@@ -615,7 +614,7 @@ fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Cont
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
                 ContextElement::Exists(ex0.to_string()),
-                vec![
+                vector![
                     ContextElement::Exists(ex2.clone()),
                     ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
@@ -642,7 +641,7 @@ fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Cont
             print_rule("InstLReach");
             return ctx0.insert_in_place(
                 ContextElement::Exists(ex1.clone()),
-                vec![ContextElement::Solved(
+                vector![ContextElement::Solved(
                     ex1.clone(),
                     Type::Exists(ex0.into()),
                 )],
@@ -664,7 +663,7 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
         {
             return ctx0.insert_in_place(
                 ContextElement::Exists(ex0.into()),
-                vec![ContextElement::Solved(ex0.into(), t.clone())],
+                vector![ContextElement::Solved(ex0.into(), t.clone())],
             );
         }
         // InstRArr
@@ -674,7 +673,7 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
                 ContextElement::Exists(ex0.into()),
-                vec![
+                vector![
                     ContextElement::Exists(ex2.clone()),
                     ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
@@ -712,7 +711,7 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
                 ContextElement::Exists(ex0.into()),
-                vec![
+                vector![
                     ContextElement::Exists(ex2.clone()),
                     ContextElement::Exists(ex1.clone()),
                     ContextElement::Solved(
@@ -733,7 +732,7 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
             print_rule("InstRReach");
             return ctx0.insert_in_place(
                 ContextElement::Exists(ex1.clone()),
-                vec![ContextElement::Solved(
+                vector![ContextElement::Solved(
                     ex1.clone(),
                     Type::Exists(ex0.into()),
                 )],
