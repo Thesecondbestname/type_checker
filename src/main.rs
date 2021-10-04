@@ -13,19 +13,21 @@ use im_rc::vector;
 use im_rc::Vector;
 use std::fmt;
 
+type Name = String;
+
 ///Figure 6
 #[derive(Clone, Debug)]
 enum Expr {
     /// Variable
-    Var(String),
+    Var(Name),
     /// Literal
     Lit(Lit),
     /// Abstraction
-    Abs(String, Box<Expr>),
+    Abs(Name, Box<Expr>),
     /// Application
     App(Box<Expr>, Box<Expr>),
     /// Let expression
-    Let(String, Box<Expr>, Box<Expr>),
+    Let(Name, Box<Expr>, Box<Expr>),
     /// Type Annotation
     Ann(Box<Expr>, Type),
     /// Tuple
@@ -75,11 +77,11 @@ enum Type {
     /// Literal type
     Lit(LitType),
     /// Type variable
-    Var(String),
+    Var(Name),
     /// Existential type
-    Exists(String),
+    Exists(Name),
     /// Forall quantifier
-    Forall(String, Box<Type>),
+    Forall(Name, Box<Type>),
     /// Function type
     Fun(Box<Type>, Box<Type>),
     /// Tuple type
@@ -133,38 +135,38 @@ impl Type {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ContextElement {
+enum CtxElem {
     /// Variable
-    Var(String),
+    Var(Name),
     /// Existential type variable
-    Exists(String),
+    Exists(Name),
     /// Solved type variable
-    Solved(String, Type),
+    Solved(Name, Type),
     /// Marker type variable
-    Marker(String),
+    Marker(Name),
     /// Typed term variable
-    TypedVar(String, Type),
+    TypedVar(Name, Type),
 }
 
-impl fmt::Display for ContextElement {
+impl fmt::Display for CtxElem {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            ContextElement::Var(var) => write!(f, "{}", var),
-            ContextElement::Exists(ex) => write!(f, "{}^", ex),
-            ContextElement::Solved(a, ty) => write!(f, "{}^: {}", a, ty),
-            ContextElement::Marker(a) => write!(f, "<|{}", a),
-            ContextElement::TypedVar(x, ty) => write!(f, "{}: {}", x, ty),
+            CtxElem::Var(var) => write!(f, "{}", var),
+            CtxElem::Exists(ex) => write!(f, "{}^", ex),
+            CtxElem::Solved(a, ty) => write!(f, "{}^: {}", a, ty),
+            CtxElem::Marker(a) => write!(f, "<|{}", a),
+            CtxElem::TypedVar(x, ty) => write!(f, "{}: {}", x, ty),
         }
     }
 }
 
 /// As the context needs to be ordered, it is implemented as a simple Vector.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-struct Context {
-    elements: Vector<ContextElement>,
+struct Ctx {
+    elements: Vector<CtxElem>,
 }
 
-impl fmt::Display for Context {
+impl fmt::Display for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "[").unwrap();
         &self.elements.iter().fold(true, |first, ele| {
@@ -179,20 +181,20 @@ impl fmt::Display for Context {
 }
 
 /// Context operations derive from "Hole notation" described in 3.1 and the fact that the context is ordered.
-impl Context {
+impl Ctx {
     /// Adds an element to the end of the context
-    fn add(&self, element: ContextElement) -> Self {
+    fn add(&self, element: CtxElem) -> Self {
         let mut eles = self.elements.clone();
         eles.push_back(element);
-        Context { elements: eles }
+        Ctx { elements: eles }
     }
 
     /// Splits a context at the index of an element, the element is included in the left-hand-side of the split
-    fn split_at(&self, element: ContextElement) -> (Context, Context) {
+    fn split_at(&self, element: CtxElem) -> (Ctx, Ctx) {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
             let (lhs, rhs) = self.elements.clone().split_at(index);
-            let left_context = Context { elements: lhs };
-            let right_context = Context { elements: rhs };
+            let left_context = Ctx { elements: lhs };
+            let right_context = Ctx { elements: rhs };
 
             return (left_context, right_context);
         }
@@ -200,22 +202,22 @@ impl Context {
     }
 
     /// Replaces `element` with `inserts`
-    fn insert_in_place(&self, element: ContextElement, inserts: Vector<ContextElement>) -> Self {
+    fn insert_in_place(&self, element: CtxElem, inserts: Vector<CtxElem>) -> Self {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
             let (mut lhs, rhs) = self.elements.clone().split_at(index + 1);
             lhs.append(inserts);
             lhs.append(rhs);
-            return Context { elements: lhs };
+            return Ctx { elements: lhs };
         }
         panic!();
     }
 
     /// Drops all elements after `element`
-    fn drop(&self, element: ContextElement) -> Self {
+    fn drop(&self, element: CtxElem) -> Self {
         if let Some(index) = self.elements.iter().position(|ele| ele == &element) {
             let mut eles = self.elements.clone();
             eles.split_off(index);
-            return Context { elements: eles };
+            return Ctx { elements: eles };
         }
         panic!();
     }
@@ -223,7 +225,7 @@ impl Context {
     /// Returns `Some(Type)` if `a0` is solved, else `None`
     fn get_solved(&self, a0: &str) -> Option<&Type> {
         for elem in &self.elements {
-            if let ContextElement::Solved(a1, t) = elem {
+            if let CtxElem::Solved(a1, t) = elem {
                 if a0 == a1 {
                     return Some(t);
                 }
@@ -236,20 +238,20 @@ impl Context {
     fn has_existential(&self, a: &str) -> bool {
         self.elements
             .iter()
-            .any(|elem| elem == &ContextElement::Exists(a.to_string()))
+            .any(|elem| elem == &CtxElem::Exists(a.to_string()))
     }
 
     /// Returns `true` if `a` is a variable, else `false`.
     fn has_variable(&self, a: &str) -> bool {
         self.elements
             .iter()
-            .any(|ele| ele == &ContextElement::Var(a.to_string()))
+            .any(|ele| ele == &CtxElem::Var(a.to_string()))
     }
 
     /// Returns `Some(Type)` if `x` is a type annotation, else `None`
     fn get_annotation(&self, x0: &str) -> Option<&Type> {
         for elem in &self.elements {
-            if let ContextElement::TypedVar(x1, t) = elem {
+            if let CtxElem::TypedVar(x1, t) = elem {
                 if x0 == x1 {
                     return Some(t);
                 }
@@ -269,7 +271,7 @@ struct State {
 
 impl State {
     /// Returns a fresh exitential
-    fn fresh_existential(&mut self) -> String {
+    fn fresh_existential(&mut self) -> Name {
         let result = format!("t{}", self.existentials);
         self.existentials += 1;
         result
@@ -290,7 +292,7 @@ fn literal_checks_against(e: &Lit, t: &LitType) -> bool {
 }
 
 /// Figure 11.
-fn checks_against(state: &mut State, ctx0: &Context, e: &Expr, t: &Type) -> Context {
+fn checks_against(state: &mut State, ctx0: &Ctx, e: &Expr, t: &Type) -> Ctx {
     print_helper("check", format!("{}", e), format!("{}", t), ctx0);
     assert!(is_well_formed(ctx0, t));
     match (e, t) {
@@ -303,7 +305,7 @@ fn checks_against(state: &mut State, ctx0: &Context, e: &Expr, t: &Type) -> Cont
         // ->I
         (Expr::Abs(x, e), Type::Fun(t0, t1)) => {
             print_rule("->I");
-            let elem = ContextElement::TypedVar(x.clone(), *t0.clone());
+            let elem = CtxElem::TypedVar(x.clone(), *t0.clone());
             let ctx1 = ctx0.add(elem.clone());
             let ctx2 = checks_against(state, &ctx1, e, t1);
             let ctx3 = ctx2.drop(elem);
@@ -312,7 +314,7 @@ fn checks_against(state: &mut State, ctx0: &Context, e: &Expr, t: &Type) -> Cont
         // ∀I
         (_, Type::Forall(a, t)) => {
             print_rule("∀I");
-            let elem = ContextElement::Var(a.clone());
+            let elem = CtxElem::Var(a.clone());
             let ctx1 = ctx0.add(elem.clone());
             let ctx2 = checks_against(state, &ctx1, e, t);
             let ctx3 = ctx2.drop(elem);
@@ -350,7 +352,7 @@ fn literal_synthesizes_to(e: &Lit) -> LitType {
 }
 
 ///Figure 11
-fn synthesizes_to(state: &mut State, ctx0: &Context, e: &Expr) -> (Type, Context) {
+fn synthesizes_to(state: &mut State, ctx0: &Ctx, e: &Expr) -> (Type, Ctx) {
     print_helper("synth", format!("{}", e), "".into(), ctx0);
     match e {
         // 1I=>
@@ -381,15 +383,11 @@ fn synthesizes_to(state: &mut State, ctx0: &Context, e: &Expr) -> (Type, Context
             let ex0 = state.fresh_existential();
             let ex1 = state.fresh_existential();
             let ctx1 = ctx0
-                .add(ContextElement::Exists(ex0.clone()))
-                .add(ContextElement::Exists(ex1.clone()))
-                .add(ContextElement::TypedVar(
-                    x.clone(),
-                    Type::Exists(ex0.clone()),
-                ));
-            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1.clone())).drop(
-                ContextElement::TypedVar(x.clone(), Type::Exists(ex0.clone())),
-            );
+                .add(CtxElem::Exists(ex0.clone()))
+                .add(CtxElem::Exists(ex1.clone()))
+                .add(CtxElem::TypedVar(x.clone(), Type::Exists(ex0.clone())));
+            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1.clone()))
+                .drop(CtxElem::TypedVar(x.clone(), Type::Exists(ex0.clone())));
             return (
                 Type::Fun(
                     Type::Exists(ex0.clone()).into(),
@@ -407,27 +405,22 @@ fn synthesizes_to(state: &mut State, ctx0: &Context, e: &Expr) -> (Type, Context
         Expr::Let(x, e0, e1) => {
             print_rule("Let");
             let (t0, ctx1) = synthesizes_to(state, ctx0, e0);
-            let ctx2 = ctx1.add(ContextElement::TypedVar(x.clone(), t0.clone()));
+            let ctx2 = ctx1.add(CtxElem::TypedVar(x.clone(), t0.clone()));
             let (t1, ctx3) = synthesizes_to(state, &ctx2, e1);
-            let ctx4 = ctx3.insert_in_place(ContextElement::TypedVar(x.clone(), t0), vector![]);
+            let ctx4 = ctx3.insert_in_place(CtxElem::TypedVar(x.clone(), t0), vector![]);
             return (t1, ctx4);
         }
         // ->E
-        Expr::App(e1, e2) => {
+        Expr::App(e0, e1) => {
             print_rule("->E");
-            let (t, ctx1) = synthesizes_to(state, ctx0, e1);
-            return application_synthesizes_to(state, &ctx1, &apply_context(t, &ctx1), e2);
+            let (t, ctx1) = synthesizes_to(state, ctx0, e0);
+            return application_synthesizes_to(state, &ctx1, &apply_context(t, &ctx1), e1);
         }
     }
 }
 
 /// Figure 11
-fn application_synthesizes_to(
-    state: &mut State,
-    ctx0: &Context,
-    t: &Type,
-    e: &Expr,
-) -> (Type, Context) {
+fn application_synthesizes_to(state: &mut State, ctx0: &Ctx, t: &Type, e: &Expr) -> (Type, Ctx) {
     print_helper("app_synth", format!("{}", e), format!("{}", t), ctx0);
     match t {
         // α^App
@@ -436,11 +429,11 @@ fn application_synthesizes_to(
             let ex1 = state.fresh_existential();
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
-                ContextElement::Exists(ex0.to_string()),
+                CtxElem::Exists(ex0.to_string()),
                 vector![
-                    ContextElement::Exists(ex2.clone()),
-                    ContextElement::Exists(ex1.clone()),
-                    ContextElement::Solved(
+                    CtxElem::Exists(ex2.clone()),
+                    CtxElem::Exists(ex1.clone()),
+                    CtxElem::Solved(
                         ex0.clone(),
                         Type::Fun(
                             Type::Exists(ex1.clone()).into(),
@@ -456,7 +449,7 @@ fn application_synthesizes_to(
         Type::Forall(a0, t0) => {
             print_rule("∀App");
             let ex0 = state.fresh_existential();
-            let ctx1 = ctx0.add(ContextElement::Exists(ex0.clone()));
+            let ctx1 = ctx0.add(CtxElem::Exists(ex0.clone()));
             let t1 = substitution(t0, a0, &Type::Exists(ex0));
             return application_synthesizes_to(state, &ctx1, &t1, e);
         }
@@ -471,12 +464,12 @@ fn application_synthesizes_to(
 }
 
 /// Figure 7
-fn is_well_formed(ctx: &Context, t: &Type) -> bool {
+fn is_well_formed(ctx: &Ctx, t: &Type) -> bool {
     match t {
         Type::Lit(_) => true,
         Type::Var(x) => ctx.has_variable(x),
         Type::Fun(t0, t1) => is_well_formed(ctx, t0) && is_well_formed(ctx, t1),
-        Type::Forall(a, t) => is_well_formed(&ctx.add(ContextElement::Var(a.clone())), t),
+        Type::Forall(a, t) => is_well_formed(&ctx.add(CtxElem::Var(a.clone())), t),
         Type::Exists(ex) => ctx.has_existential(ex) || ctx.get_solved(ex).is_some(),
         Type::Tup(t0, t1) => is_well_formed(ctx, t0) && is_well_formed(ctx, t1),
     }
@@ -505,7 +498,7 @@ fn occurs_in(x: &str, a: &Type) -> bool {
 }
 
 /// Figure 9
-fn subtype(state: &mut State, ctx0: &Context, t0: &Type, t1: &Type) -> Context {
+fn subtype(state: &mut State, ctx0: &Ctx, t0: &Type, t1: &Type) -> Ctx {
     print_helper("subtype", format!("{}", t0), format!("{}", t1), ctx0);
     assert!(is_well_formed(ctx0, t0));
     assert!(is_well_formed(ctx0, t1));
@@ -556,18 +549,18 @@ fn subtype(state: &mut State, ctx0: &Context, t0: &Type, t1: &Type) -> Context {
             print_rule("<:∀L");
             let ex0 = state.fresh_existential();
             let ctx1 = ctx0
-                .add(ContextElement::Marker(ex0.clone()))
-                .add(ContextElement::Exists(ex0.clone()));
+                .add(CtxElem::Marker(ex0.clone()))
+                .add(CtxElem::Exists(ex0.clone()));
             let t3 = substitution(t2, a, &Type::Exists(ex0.clone()));
             let ctx2 = subtype(state, &ctx1, &t3, t1);
-            return ctx2.drop(ContextElement::Marker(ex0.clone()));
+            return ctx2.drop(CtxElem::Marker(ex0.clone()));
         }
         // <:∀R
         (_, Type::Forall(a, t2)) => {
             print_rule("<:∀R");
-            let ctx1 = ctx0.add(ContextElement::Var(a.clone()));
+            let ctx1 = ctx0.add(CtxElem::Var(a.clone()));
             let ctx2 = subtype(state, &ctx1, t0, t2);
-            return ctx2.drop(ContextElement::Var(a.clone()));
+            return ctx2.drop(CtxElem::Var(a.clone()));
         }
         // <:InstatiateL
         (Type::Exists(ex0), _) => {
@@ -592,19 +585,19 @@ fn subtype(state: &mut State, ctx0: &Context, t0: &Type, t1: &Type) -> Context {
 }
 
 /// Figure 10
-fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Context {
+fn instantiate_l(state: &mut State, ctx0: &Ctx, ex0: &str, t: &Type) -> Ctx {
     print_helper("instantiate_l", ex0.into(), format!("{}", t), ctx0);
     match t {
         // InstLSolve
         t if {
-            let (ctx1, _) = ctx0.split_at(ContextElement::Exists(ex0.to_string()));
+            let (ctx1, _) = ctx0.split_at(CtxElem::Exists(ex0.to_string()));
             t.is_monotype() && is_well_formed(&ctx1, t)
         } =>
         {
             print_rule("InstLSolve");
             return ctx0.insert_in_place(
-                ContextElement::Exists(ex0.to_string()),
-                vector![ContextElement::Solved(ex0.into(), t.clone())],
+                CtxElem::Exists(ex0.to_string()),
+                vector![CtxElem::Solved(ex0.into(), t.clone())],
             );
         }
         // InstLArr
@@ -613,11 +606,11 @@ fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Cont
             let ex1 = state.fresh_existential();
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
-                ContextElement::Exists(ex0.to_string()),
+                CtxElem::Exists(ex0.to_string()),
                 vector![
-                    ContextElement::Exists(ex2.clone()),
-                    ContextElement::Exists(ex1.clone()),
-                    ContextElement::Solved(
+                    CtxElem::Exists(ex2.clone()),
+                    CtxElem::Exists(ex1.clone()),
+                    CtxElem::Solved(
                         ex0.into(),
                         Type::Fun(
                             Type::Exists(ex1.clone()).into(),
@@ -633,18 +626,15 @@ fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Cont
         // InstAIIR
         Type::Forall(a, t1) => {
             print_rule("InstLAllR");
-            let ctx1 = instantiate_l(state, &ctx0.add(ContextElement::Var(a.clone())), ex0, t1);
-            return ctx1.drop(ContextElement::Var(a.clone()));
+            let ctx1 = instantiate_l(state, &ctx0.add(CtxElem::Var(a.clone())), ex0, t1);
+            return ctx1.drop(CtxElem::Var(a.clone()));
         }
         // InstLReach
         Type::Exists(ex1) => {
             print_rule("InstLReach");
             return ctx0.insert_in_place(
-                ContextElement::Exists(ex1.clone()),
-                vector![ContextElement::Solved(
-                    ex1.clone(),
-                    Type::Exists(ex0.into()),
-                )],
+                CtxElem::Exists(ex1.clone()),
+                vector![CtxElem::Solved(ex1.clone(), Type::Exists(ex0.into()),)],
             );
         }
         _ => panic!(),
@@ -652,18 +642,18 @@ fn instantiate_l(state: &mut State, ctx0: &Context, ex0: &str, t: &Type) -> Cont
 }
 
 /// Figure 10
-fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Context {
+fn instantiate_r(state: &mut State, ctx0: &Ctx, t: &Type, ex0: &str) -> Ctx {
     print_helper("instantiate_r", format!("{}", t), ex0.into(), ctx0);
     match t {
         // InstRSolve
         t if {
-            let (ctx1, _) = ctx0.split_at(ContextElement::Exists(ex0.to_string()));
+            let (ctx1, _) = ctx0.split_at(CtxElem::Exists(ex0.to_string()));
             t.is_monotype() && is_well_formed(&ctx1, t)
         } =>
         {
             return ctx0.insert_in_place(
-                ContextElement::Exists(ex0.into()),
-                vector![ContextElement::Solved(ex0.into(), t.clone())],
+                CtxElem::Exists(ex0.into()),
+                vector![CtxElem::Solved(ex0.into(), t.clone())],
             );
         }
         // InstRArr
@@ -672,11 +662,11 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
             let ex1 = state.fresh_existential();
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
-                ContextElement::Exists(ex0.into()),
+                CtxElem::Exists(ex0.into()),
                 vector![
-                    ContextElement::Exists(ex2.clone()),
-                    ContextElement::Exists(ex1.clone()),
-                    ContextElement::Solved(
+                    CtxElem::Exists(ex2.clone()),
+                    CtxElem::Exists(ex1.clone()),
+                    CtxElem::Solved(
                         ex0.into(),
                         Type::Fun(
                             Type::Exists(ex1.clone()).into(),
@@ -694,27 +684,27 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
             print_rule("InstRAllL");
             let ex1 = state.fresh_existential();
             let ctx1 = ctx0
-                .add(ContextElement::Marker(ex1.clone()))
-                .add(ContextElement::Exists(ex1.clone()));
+                .add(CtxElem::Marker(ex1.clone()))
+                .add(CtxElem::Exists(ex1.clone()));
             let ctx2 = instantiate_r(
                 state,
                 &ctx1,
                 &substitution(t1, a, &Type::Exists(ex1.clone())),
                 ex0,
             );
-
-            return ctx2.drop(ContextElement::Marker(ex1.clone()));
+            let ctx3 = ctx2.drop(CtxElem::Marker(ex1.clone()));
+            return ctx3;
         }
         Type::Tup(t0, t1) => {
             print_rule("InstRProd");
             let ex1 = state.fresh_existential();
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
-                ContextElement::Exists(ex0.into()),
+                CtxElem::Exists(ex0.into()),
                 vector![
-                    ContextElement::Exists(ex2.clone()),
-                    ContextElement::Exists(ex1.clone()),
-                    ContextElement::Solved(
+                    CtxElem::Exists(ex2.clone()),
+                    CtxElem::Exists(ex1.clone()),
+                    CtxElem::Solved(
                         ex0.into(),
                         Type::Tup(
                             Type::Exists(ex1.clone()).into(),
@@ -731,11 +721,8 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
         Type::Exists(ex1) => {
             print_rule("InstRReach");
             return ctx0.insert_in_place(
-                ContextElement::Exists(ex1.clone()),
-                vector![ContextElement::Solved(
-                    ex1.clone(),
-                    Type::Exists(ex0.into()),
-                )],
+                CtxElem::Exists(ex1.clone()),
+                vector![CtxElem::Solved(ex1.clone(), Type::Exists(ex0.into()),)],
             );
         }
         _ => panic!(),
@@ -743,25 +730,25 @@ fn instantiate_r(state: &mut State, ctx0: &Context, t: &Type, ex0: &str) -> Cont
 }
 
 /// Figure 8
-fn apply_context(t0: Type, ctx: &Context) -> Type {
-    match t0 {
-        Type::Var(_) => t0,
-        Type::Lit(_) => t0,
+fn apply_context(t: Type, ctx: &Ctx) -> Type {
+    match t {
+        Type::Var(_) => t,
+        Type::Lit(_) => t,
         Type::Exists(ref ex) => {
             if let Some(t1) = ctx.get_solved(ex) {
                 apply_context(t1.clone(), ctx)
             } else {
-                t0
+                t
             }
         }
-        Type::Fun(t1, t2) => Type::Fun(
+        Type::Fun(t0, t1) => Type::Fun(
+            apply_context(*t0, ctx).into(),
             apply_context(*t1, ctx).into(),
-            apply_context(*t2, ctx).into(),
         ),
-        Type::Forall(a, t1) => Type::Forall(a, apply_context(*t1, ctx).into()),
-        Type::Tup(t1, t2) => Type::Tup(
+        Type::Forall(a, t0) => Type::Forall(a, apply_context(*t0, ctx).into()),
+        Type::Tup(t0, t1) => Type::Tup(
+            apply_context(*t0, ctx).into(),
             apply_context(*t1, ctx).into(),
-            apply_context(*t2, ctx).into(),
         ),
     }
 }
@@ -799,14 +786,14 @@ fn substitution(t: &Type, xr: &str, tr: &Type) -> Type {
             substitution(t0, xr, tr).into(),
             substitution(t1, xr, tr).into(),
         ),
-        Type::Fun(t1, t2) => Type::Fun(
+        Type::Fun(t0, t1) => Type::Fun(
+            substitution(t0, xr, tr).into(),
             substitution(t1, xr, tr).into(),
-            substitution(t2, xr, tr).into(),
         ),
     }
 }
 
-fn print_helper(fun: &str, c1: String, c2: String, context: &Context) {
+fn print_helper(fun: &str, c1: Name, c2: Name, context: &Ctx) {
     print!(
         "{:<15} {:<85}| {:<25} {:<88}",
         fun,
@@ -996,7 +983,7 @@ fn ty_forall(x: &str, t: Type) -> Type {
 
 impl Expr {
     fn synth(self) -> Type {
-        let (t, ctx) = synthesizes_to(&mut State::default(), &Context::default(), &self);
+        let (t, ctx) = synthesizes_to(&mut State::default(), &Ctx::default(), &self);
         println!("-------------------RESULTS-------------------");
         println!("{} in context {}", t, ctx);
         let t = apply_context(t, &ctx);
