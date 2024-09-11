@@ -1,4 +1,7 @@
 #![allow(unused)]
+#![allow(clippy::use_self)]
+#![allow(clippy::needless_return)]
+#![allow(clippy::uninlined_format_args)]
 
 //! Implementation of "Complete and Easy Bidirectional Typechecking for Higher-Rank Polymorphism"
 //! See: https://arxiv.org/abs/1306.6032
@@ -13,7 +16,25 @@ use im_rc::vector;
 use im_rc::Vector;
 use std::fmt;
 
-type Name = String;
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+enum Name {
+    Index(usize),
+    Name(&'static str),
+}
+
+impl Name {
+    const fn with_name(n: &'static str) -> Self {
+        Self::Name(n)
+    }
+}
+impl fmt::Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Name(name) => return write!(f, "t{name}"),
+            Self::Index(i) => write!(f, "t{}", i),
+        }
+    }
+}
 
 ///Figure 6
 #[derive(Clone, Debug)]
@@ -169,9 +190,9 @@ struct Ctx {
 impl fmt::Display for Ctx {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "[").unwrap();
-        &self.elements.iter().fold(true, |first, ele| {
+        self.elements.iter().fold(true, |first, ele| {
             if !first {
-                write!(f, ", ").unwrap()
+                write!(f, ", ").unwrap();
             };
             write!(f, "{}", ele).unwrap();
             false
@@ -223,10 +244,10 @@ impl Ctx {
     }
 
     /// Returns `Some(Type)` if `a0` is solved, else `None`
-    fn get_solved(&self, a0: &str) -> Option<&Type> {
+    fn get_solved(&self, a0: Name) -> Option<&Type> {
         for elem in &self.elements {
             if let CtxElem::Solved(a1, t) = elem {
-                if a0 == a1 {
+                if a0 == *a1 {
                     return Some(t);
                 }
             }
@@ -235,24 +256,20 @@ impl Ctx {
     }
 
     /// Returns `true` if `a` is an existential, else `false`
-    fn has_existential(&self, a: &str) -> bool {
-        self.elements
-            .iter()
-            .any(|elem| elem == &CtxElem::Exists(a.to_string()))
+    fn has_existential(&self, a: Name) -> bool {
+        self.elements.iter().any(|elem| elem == &CtxElem::Exists(a))
     }
 
     /// Returns `true` if `a` is a variable, else `false`.
-    fn has_variable(&self, a: &str) -> bool {
-        self.elements
-            .iter()
-            .any(|ele| ele == &CtxElem::Var(a.to_string()))
+    fn has_variable(&self, a: Name) -> bool {
+        self.elements.iter().any(|ele| ele == &CtxElem::Var(a))
     }
 
     /// Returns `Some(Type)` if `x` is a type annotation, else `None`
-    fn get_annotation(&self, x0: &str) -> Option<&Type> {
+    fn get_annotation(&self, x0: Name) -> Option<&Type> {
         for elem in &self.elements {
             if let CtxElem::TypedVar(x1, t) = elem {
-                if x0 == x1 {
+                if x0 == *x1 {
                     return Some(t);
                 }
             }
@@ -272,23 +289,23 @@ struct State {
 impl State {
     /// Returns a fresh exitential
     fn fresh_existential(&mut self) -> Name {
-        let result = format!("t{}", self.existentials);
+        let result = self.existentials;
         self.existentials += 1;
-        result
+        Name::Index(result)
     }
 }
 
 /// Returns `true` if literal expression checks against literal type, else `false`.
-fn literal_checks_against(e: &Lit, t: &LitType) -> bool {
-    match (e, t) {
-        (Lit::Char(_), LitType::Char) => true,
-        (Lit::String(_), LitType::String) => true,
-        (Lit::Int(_), LitType::Int) => true,
-        (Lit::Float(_), LitType::Float) => true,
-        (Lit::Bool(_), LitType::Bool) => true,
-        (Lit::Unit, LitType::Unit) => true,
-        _ => false,
-    }
+const fn literal_checks_against(e: &Lit, t: &LitType) -> bool {
+    matches!(
+        (e, t),
+        (Lit::Char(_), LitType::Char)
+            | (Lit::String(_), LitType::String)
+            | (Lit::Int(_), LitType::Int)
+            | (Lit::Float(_), LitType::Float)
+            | (Lit::Bool(_), LitType::Bool)
+            | (Lit::Unit, LitType::Unit)
+    )
 }
 
 /// Figure 11.
@@ -305,7 +322,7 @@ fn checks_against(state: &mut State, ctx0: &Ctx, e: &Expr, t: &Type) -> Ctx {
         // ->I
         (Expr::Abs(x, e), Type::Fun(t0, t1)) => {
             print_rule("->I");
-            let elem = CtxElem::TypedVar(x.clone(), *t0.clone());
+            let elem = CtxElem::TypedVar(*x, *t0.clone());
             let ctx1 = ctx0.add(elem.clone());
             let ctx2 = checks_against(state, &ctx1, e, t1);
             let ctx3 = ctx2.drop(elem);
@@ -314,7 +331,7 @@ fn checks_against(state: &mut State, ctx0: &Ctx, e: &Expr, t: &Type) -> Ctx {
         // ∀I
         (_, Type::Forall(a, t)) => {
             print_rule("∀I");
-            let elem = CtxElem::Var(a.clone());
+            let elem = CtxElem::Var(*a);
             let ctx1 = ctx0.add(elem.clone());
             let ctx2 = checks_against(state, &ctx1, e, t);
             let ctx3 = ctx2.drop(elem);
@@ -340,7 +357,7 @@ fn checks_against(state: &mut State, ctx0: &Ctx, e: &Expr, t: &Type) -> Ctx {
 }
 
 /// Synthesizes a type from a literal.
-fn literal_synthesizes_to(e: &Lit) -> LitType {
+const fn literal_synthesizes_to(e: &Lit) -> LitType {
     match e {
         Lit::Char(_) => LitType::Char,
         Lit::String(_) => LitType::String,
@@ -353,7 +370,7 @@ fn literal_synthesizes_to(e: &Lit) -> LitType {
 
 ///Figure 11
 fn synthesizes_to(state: &mut State, ctx0: &Ctx, e: &Expr) -> (Type, Ctx) {
-    print_helper("synth", format!("{}", e), "".into(), ctx0);
+    print_helper("synth", format!("{e}"), String::new(), ctx0);
     match e {
         // 1I=>
         Expr::Lit(e) => {
@@ -363,7 +380,7 @@ fn synthesizes_to(state: &mut State, ctx0: &Ctx, e: &Expr) -> (Type, Ctx) {
         // Var
         Expr::Var(x) => {
             print_rule("Var");
-            if let Some(t) = ctx0.get_annotation(x) {
+            if let Some(t) = ctx0.get_annotation(*x) {
                 return (t.clone(), ctx0.clone());
             };
             panic!();
@@ -383,16 +400,13 @@ fn synthesizes_to(state: &mut State, ctx0: &Ctx, e: &Expr) -> (Type, Ctx) {
             let ex0 = state.fresh_existential();
             let ex1 = state.fresh_existential();
             let ctx1 = ctx0
-                .add(CtxElem::Exists(ex0.clone()))
-                .add(CtxElem::Exists(ex1.clone()))
-                .add(CtxElem::TypedVar(x.clone(), Type::Exists(ex0.clone())));
-            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1.clone()))
-                .drop(CtxElem::TypedVar(x.clone(), Type::Exists(ex0.clone())));
+                .add(CtxElem::Exists(ex0))
+                .add(CtxElem::Exists(ex1))
+                .add(CtxElem::TypedVar(*x, Type::Exists(ex0)));
+            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1))
+                .drop(CtxElem::TypedVar(*x, Type::Exists(ex0)));
             return (
-                Type::Fun(
-                    Type::Exists(ex0.clone()).into(),
-                    Type::Exists(ex1.clone()).into(),
-                ),
+                Type::Fun(Type::Exists(ex0).into(), Type::Exists(ex1.clone()).into()),
                 ctx2,
             );
         }
@@ -405,9 +419,9 @@ fn synthesizes_to(state: &mut State, ctx0: &Ctx, e: &Expr) -> (Type, Ctx) {
         Expr::Let(x, e0, e1) => {
             print_rule("Let");
             let (t0, ctx1) = synthesizes_to(state, ctx0, e0);
-            let ctx2 = ctx1.add(CtxElem::TypedVar(x.clone(), t0.clone()));
+            let ctx2 = ctx1.add(CtxElem::TypedVar(*x, t0.clone()));
             let (t1, ctx3) = synthesizes_to(state, &ctx2, e1);
-            let ctx4 = ctx3.insert_in_place(CtxElem::TypedVar(x.clone(), t0), vector![]);
+            let ctx4 = ctx3.insert_in_place(CtxElem::TypedVar(*x, t0), vector![]);
             return (t1, ctx4);
         }
         // ->E
@@ -421,7 +435,7 @@ fn synthesizes_to(state: &mut State, ctx0: &Ctx, e: &Expr) -> (Type, Ctx) {
 
 /// Figure 11
 fn application_synthesizes_to(state: &mut State, ctx0: &Ctx, t: &Type, e: &Expr) -> (Type, Ctx) {
-    print_helper("app_synth", format!("{}", e), format!("{}", t), ctx0);
+    print_helper("app_synth", format!("{e}"), format!("{t}"), ctx0);
     match t {
         // α^App
         Type::Exists(ex0) => {
@@ -429,12 +443,12 @@ fn application_synthesizes_to(state: &mut State, ctx0: &Ctx, t: &Type, e: &Expr)
             let ex1 = state.fresh_existential();
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
-                CtxElem::Exists(ex0.to_string()),
+                CtxElem::Exists(*ex0),
                 vector![
                     CtxElem::Exists(ex2.clone()),
                     CtxElem::Exists(ex1.clone()),
                     CtxElem::Solved(
-                        ex0.clone(),
+                        *ex0,
                         Type::Fun(
                             Type::Exists(ex1.clone()).into(),
                             Type::Exists(ex2.clone()).into(),
@@ -449,8 +463,8 @@ fn application_synthesizes_to(state: &mut State, ctx0: &Ctx, t: &Type, e: &Expr)
         Type::Forall(a0, t0) => {
             print_rule("∀App");
             let ex0 = state.fresh_existential();
-            let ctx1 = ctx0.add(CtxElem::Exists(ex0.clone()));
-            let t1 = substitution(t0, a0, &Type::Exists(ex0));
+            let ctx1 = ctx0.add(CtxElem::Exists(ex0));
+            let t1 = substitution(t0, *a0, &Type::Exists(ex0));
             return application_synthesizes_to(state, &ctx1, &t1, e);
         }
         // App
@@ -467,39 +481,39 @@ fn application_synthesizes_to(state: &mut State, ctx0: &Ctx, t: &Type, e: &Expr)
 fn is_well_formed(ctx: &Ctx, t: &Type) -> bool {
     match t {
         Type::Lit(_) => true,
-        Type::Var(x) => ctx.has_variable(x),
+        Type::Var(x) => ctx.has_variable(*x),
         Type::Fun(t0, t1) => is_well_formed(ctx, t0) && is_well_formed(ctx, t1),
-        Type::Forall(a, t) => is_well_formed(&ctx.add(CtxElem::Var(a.clone())), t),
-        Type::Exists(ex) => ctx.has_existential(ex) || ctx.get_solved(ex).is_some(),
+        Type::Forall(a, t) => is_well_formed(&ctx.add(CtxElem::Var(*a)), t),
+        Type::Exists(ex) => ctx.has_existential(*ex) || ctx.get_solved(*ex).is_some(),
         Type::Tup(t0, t1) => is_well_formed(ctx, t0) && is_well_formed(ctx, t1),
     }
 }
 
-/// This corresponds to the FV call in Figure 9 Rule <:InstantiateL and <:InstantiateR
+/// This corresponds to the FV call in Figure 9 Rule <:`InstantiateL` and <:`InstantiateR`
 /// It checks if a existential variable already occurs in a type to be able to find and panic on cycles
 ///
 /// Alas, I could not find a definition of the FV function and had to copy the implementation of
 /// https://github.com/ollef/Bidirectional and https://github.com/atennapel/bidirectional.js
-fn occurs_in(x: &str, a: &Type) -> bool {
+fn occurs_in(x: Name, a: &Type) -> bool {
     match a {
         Type::Lit(_) => false,
-        Type::Var(a) => x == a,
+        Type::Var(a) => x == *a,
         Type::Fun(t1, t2) => occurs_in(x, t1) || occurs_in(x, t2),
         Type::Forall(a, t) => {
-            if x == a {
+            if x == *a {
                 return true;
             } else {
                 return occurs_in(x, t);
             }
         }
-        Type::Exists(ex) => x == ex,
+        Type::Exists(ex) => x == *ex,
         Type::Tup(t0, t1) => occurs_in(x, t0) || occurs_in(x, t1),
     }
 }
 
 /// Figure 9
 fn subtype(state: &mut State, ctx0: &Ctx, t0: &Type, t1: &Type) -> Ctx {
-    print_helper("subtype", format!("{}", t0), format!("{}", t1), ctx0);
+    print_helper("subtype", format!("{t0}"), format!("{t1}"), ctx0);
     assert!(is_well_formed(ctx0, t0));
     assert!(is_well_formed(ctx0, t1));
     match (t0, t1) {
@@ -548,25 +562,23 @@ fn subtype(state: &mut State, ctx0: &Ctx, t0: &Type, t1: &Type) -> Ctx {
         (Type::Forall(a, t2), _) => {
             print_rule("<:∀L");
             let ex0 = state.fresh_existential();
-            let ctx1 = ctx0
-                .add(CtxElem::Marker(ex0.clone()))
-                .add(CtxElem::Exists(ex0.clone()));
-            let t3 = substitution(t2, a, &Type::Exists(ex0.clone()));
+            let ctx1 = ctx0.add(CtxElem::Marker(ex0)).add(CtxElem::Exists(ex0));
+            let t3 = substitution(t2, *a, &Type::Exists(ex0));
             let ctx2 = subtype(state, &ctx1, &t3, t1);
-            return ctx2.drop(CtxElem::Marker(ex0.clone()));
+            return ctx2.drop(CtxElem::Marker(ex0));
         }
         // <:∀R
         (_, Type::Forall(a, t2)) => {
             print_rule("<:∀R");
-            let ctx1 = ctx0.add(CtxElem::Var(a.clone()));
+            let ctx1 = ctx0.add(CtxElem::Var(*a));
             let ctx2 = subtype(state, &ctx1, t0, t2);
-            return ctx2.drop(CtxElem::Var(a.clone()));
+            return ctx2.drop(CtxElem::Var(*a));
         }
         // <:InstatiateL
         (Type::Exists(ex0), _) => {
             print_rule("<:InstantiateL");
-            if !occurs_in(ex0, t1) {
-                instantiate_l(state, ctx0, ex0, t1)
+            if !occurs_in(*ex0, t1) {
+                instantiate_l(state, ctx0, *ex0, t1)
             } else {
                 panic!("Circular!");
             }
@@ -574,8 +586,8 @@ fn subtype(state: &mut State, ctx0: &Ctx, t0: &Type, t1: &Type) -> Ctx {
         // <:InstantiateR
         (_, Type::Exists(ex0)) => {
             print_rule("<:InstantiateR");
-            if !occurs_in(ex0, t0) {
-                instantiate_r(state, ctx0, t0, ex0)
+            if !occurs_in(*ex0, t0) {
+                instantiate_r(state, ctx0, t0, *ex0)
             } else {
                 panic!("Circular!");
             }
@@ -585,18 +597,18 @@ fn subtype(state: &mut State, ctx0: &Ctx, t0: &Type, t1: &Type) -> Ctx {
 }
 
 /// Figure 10
-fn instantiate_l(state: &mut State, ctx0: &Ctx, ex0: &str, t: &Type) -> Ctx {
-    print_helper("instantiate_l", ex0.into(), format!("{}", t), ctx0);
+fn instantiate_l(state: &mut State, ctx0: &Ctx, ex0: Name, t: &Type) -> Ctx {
+    print_helper("instantiate_l", ex0.to_string(), format!("{}", t), ctx0);
     match t {
         // InstLSolve
         t if {
-            let (ctx1, _) = ctx0.split_at(CtxElem::Exists(ex0.to_string()));
+            let (ctx1, _) = ctx0.split_at(CtxElem::Exists(ex0));
             t.is_monotype() && is_well_formed(&ctx1, t)
         } =>
         {
             print_rule("InstLSolve");
             return ctx0.insert_in_place(
-                CtxElem::Exists(ex0.to_string()),
+                CtxElem::Exists(ex0),
                 vector![CtxElem::Solved(ex0.into(), t.clone())],
             );
         }
@@ -606,7 +618,7 @@ fn instantiate_l(state: &mut State, ctx0: &Ctx, ex0: &str, t: &Type) -> Ctx {
             let ex1 = state.fresh_existential();
             let ex2 = state.fresh_existential();
             let ctx1 = ctx0.insert_in_place(
-                CtxElem::Exists(ex0.to_string()),
+                CtxElem::Exists(ex0),
                 vector![
                     CtxElem::Exists(ex2.clone()),
                     CtxElem::Exists(ex1.clone()),
@@ -619,15 +631,15 @@ fn instantiate_l(state: &mut State, ctx0: &Ctx, ex0: &str, t: &Type) -> Ctx {
                     ),
                 ],
             );
-            let ctx2 = instantiate_r(state, &ctx1, t1, &ex1);
-            let ctx3 = instantiate_l(state, &ctx2, &ex2, &apply_context(*t2.clone(), &ctx2));
+            let ctx2 = instantiate_r(state, &ctx1, t1, ex1);
+            let ctx3 = instantiate_l(state, &ctx2, ex2, &apply_context(*t2.clone(), &ctx2));
             return ctx3;
         }
         // InstAIIR
         Type::Forall(a, t1) => {
             print_rule("InstLAllR");
-            let ctx1 = instantiate_l(state, &ctx0.add(CtxElem::Var(a.clone())), ex0, t1);
-            return ctx1.drop(CtxElem::Var(a.clone()));
+            let ctx1 = instantiate_l(state, &ctx0.add(CtxElem::Var(*a)), ex0, t1);
+            return ctx1.drop(CtxElem::Var(*a));
         }
         // InstLReach
         Type::Exists(ex1) => {
@@ -642,12 +654,12 @@ fn instantiate_l(state: &mut State, ctx0: &Ctx, ex0: &str, t: &Type) -> Ctx {
 }
 
 /// Figure 10
-fn instantiate_r(state: &mut State, ctx0: &Ctx, t: &Type, ex0: &str) -> Ctx {
-    print_helper("instantiate_r", format!("{}", t), ex0.into(), ctx0);
+fn instantiate_r(state: &mut State, ctx0: &Ctx, t: &Type, ex0: Name) -> Ctx {
+    print_helper("instantiate_r", format!("{}", t), ex0.to_string(), ctx0);
     match t {
         // InstRSolve
         t if {
-            let (ctx1, _) = ctx0.split_at(CtxElem::Exists(ex0.to_string()));
+            let (ctx1, _) = ctx0.split_at(CtxElem::Exists(ex0));
             t.is_monotype() && is_well_formed(&ctx1, t)
         } =>
         {
@@ -675,8 +687,8 @@ fn instantiate_r(state: &mut State, ctx0: &Ctx, t: &Type, ex0: &str) -> Ctx {
                     ),
                 ],
             );
-            let ctx2 = instantiate_l(state, &ctx1, &ex1, t0);
-            let ctx3 = instantiate_r(state, &ctx2, &apply_context(*t1.clone(), &ctx2), &ex2);
+            let ctx2 = instantiate_l(state, &ctx1, ex1, t0);
+            let ctx3 = instantiate_r(state, &ctx2, &apply_context(*t1.clone(), &ctx2), ex2);
             return ctx3;
         }
         // InstRAllL
@@ -689,7 +701,7 @@ fn instantiate_r(state: &mut State, ctx0: &Ctx, t: &Type, ex0: &str) -> Ctx {
             let ctx2 = instantiate_r(
                 state,
                 &ctx1,
-                &substitution(t1, a, &Type::Exists(ex1.clone())),
+                &substitution(t1, *a, &Type::Exists(ex1.clone())),
                 ex0,
             );
             let ctx3 = ctx2.drop(CtxElem::Marker(ex1.clone()));
@@ -713,8 +725,8 @@ fn instantiate_r(state: &mut State, ctx0: &Ctx, t: &Type, ex0: &str) -> Ctx {
                     ),
                 ],
             );
-            let ctx2 = instantiate_l(state, &ctx1, &ex1, t0);
-            let ctx3 = instantiate_r(state, &ctx2, &apply_context(*t1.clone(), &ctx2), &ex2);
+            let ctx2 = instantiate_l(state, &ctx1, ex1, t0);
+            let ctx3 = instantiate_r(state, &ctx2, &apply_context(*t1.clone(), &ctx2), ex2);
             return ctx3;
         }
         // InstRReach
@@ -735,7 +747,7 @@ fn apply_context(t: Type, ctx: &Ctx) -> Type {
         Type::Var(_) => t,
         Type::Lit(_) => t,
         Type::Exists(ref ex) => {
-            if let Some(t1) = ctx.get_solved(ex) {
+            if let Some(t1) = ctx.get_solved(*ex) {
                 apply_context(t1.clone(), ctx)
             } else {
                 t
@@ -755,28 +767,28 @@ fn apply_context(t: Type, ctx: &Ctx) -> Type {
 
 /// Similar to the FV function from subtyping I couldn't find a definition of substitution in the paper
 /// Thus I tried to copy the implementation of
-/// https://github.com/ollef/Bidirectional and https://github.com/atennapel/bidirectional.js
+/// <https://github.com/ollef/Bidirectional> and <https://github.com/atennapel/bidirectional.js>
 ///
 /// Substitution is written in the paper as [α^/α]A which means, α is replaced with α^ in all occurrences in A
-fn substitution(t: &Type, xr: &str, tr: &Type) -> Type {
+fn substitution(t: &Type, xr: Name, tr: &Type) -> Type {
     match t {
         Type::Lit(_) => t.clone(),
         Type::Var(x) => {
-            if xr == x {
+            if xr == *x {
                 tr.clone()
             } else {
                 t.clone()
             }
         }
         Type::Forall(a, t2) => {
-            if xr == a {
-                Type::Forall(a.clone(), tr.clone().into())
+            if xr == *a {
+                Type::Forall(*a, tr.clone().into())
             } else {
-                Type::Forall(a.clone(), substitution(t2, xr, tr).into())
+                Type::Forall(*a, substitution(t2, xr, tr).into())
             }
         }
         Type::Exists(ex) => {
-            if ex == xr {
+            if xr == *ex {
                 tr.clone()
             } else {
                 t.clone()
@@ -793,9 +805,9 @@ fn substitution(t: &Type, xr: &str, tr: &Type) -> Type {
     }
 }
 
-fn print_helper(fun: &str, c1: Name, c2: Name, context: &Ctx) {
+fn print_helper(fun: &str, c1: String, c2: String, context: &Ctx) {
     print!(
-        "{:<15} {:<85}| {:<25} {:<88}",
+        "{:<15} {:<45}| {:<25} {:<48}",
         fun,
         c1,
         c2,
@@ -804,30 +816,41 @@ fn print_helper(fun: &str, c1: Name, c2: Name, context: &Ctx) {
 }
 
 fn print_rule(rule: &str) {
-    println!("{:>20}", rule);
+    println!("{rule:>20}");
 }
 
 /// "Test": String
 #[test]
 fn basic() {
+    println!();
+    println!();
     assert_eq!(lit_str().synth(), Type::Lit(LitType::String));
 }
 
 /// (λx.x) "Test": String
 #[test]
 fn application_string() {
-    assert_eq!(app(abs("x", var("x")), lit_str()).synth(), ty_str());
+    println!();
+    println!();
+    assert_eq!(application(abs("x", var("x")), lit_str()).synth(), ty_str());
 }
 
 /// (λx.x) true: bool
 #[test]
 fn application_bool() {
-    assert_eq!(app(abs("x", var("x")), lit_bool()).synth(), ty_bool());
+    println!();
+    println!();
+    assert_eq!(
+        application(abs("x", var("x")), lit_bool()).synth(),
+        ty_bool()
+    );
 }
 
 /// λx.x: 't0->'t0
 #[test]
 fn lambda() {
+    println!();
+    println!();
     assert_eq!(
         abs("x", var("x")).synth(),
         ty_fun(ty_existential("t0"), ty_existential("t0"))
@@ -837,96 +860,115 @@ fn lambda() {
 /// (λx.x) "Test": String
 #[test]
 fn idunit() {
-    assert_eq!(app(id(), lit_str()).synth(), ty_str())
+    println!();
+    println!();
+    assert_eq!(application(id(), lit_str()).synth(), ty_str());
 }
 
 /// ("Test" × true): (String × Bool)
 #[test]
 fn tuples() {
+    println!();
+    println!();
     assert_eq!(
         tuple(lit_str(), lit_bool()).synth(),
         ty_tuple(ty_str(), ty_bool())
-    )
+    );
 }
 
 /// (λx.(x × x)) "Test": (String × String)
 #[test]
 fn tuples_in_lambda() {
+    println!();
+    println!();
     assert_eq!(
-        app(abs("x", tuple(var("x"), var("x"))), lit_str()).synth(),
+        application(abs("x", tuple(var("x"), var("x"))), lit_str()).synth(),
         ty_tuple(ty_str(), ty_str())
-    )
+    );
 }
 
 /// ((λx.(x × (x × x))) "Test"): (String × (String × String))
 #[test]
 fn nested_tuples() {
+    println!();
+    println!();
     assert_eq!(
-        app(
+        application(
             abs("x", tuple(var("x"), tuple(var("x"), var("x")))),
             lit_str()
         )
         .synth(),
         ty_tuple(ty_str(), ty_tuple(ty_str(), ty_str()))
-    )
+    );
 }
 
 /// ((λx.x) ("Test" × true)): (String × bool)
 #[test]
 fn tuples_in_fn() {
+    println!();
+    println!();
     assert_eq!(
-        app(id(), tuple(lit_str(), lit_bool())).synth(),
+        application(id(), tuple(lit_str(), lit_bool())).synth(),
         ty_tuple(ty_str(), ty_bool())
-    )
+    );
 }
 
 /// (let newid = λx.x in ((newid "Test") × (newid true))): (String × bool)
 #[test]
 fn generalised_let() {
+    println!();
+    println!();
     assert_eq!(
         let_in(
             "newid",
             id(),
             // Without annotation, e.g. abs("x", var("x")) It fails.
-            tuple(app(var("newid"), lit_str()), app(var("newid"), lit_bool()))
+            tuple(
+                application(var("newid"), lit_str()),
+                application(var("newid"), lit_bool())
+            )
         )
         .synth(),
         ty_tuple(ty_str(), ty_bool())
-    )
+    );
 }
 
 /// (let a = true in id a): bool
 #[test]
 fn let_binding() {
+    println!();
+    println!();
     assert_eq!(
-        let_in("a", lit_bool(), app(id(), var("a"))).synth(),
+        let_in("a", lit_bool(), application(id(), var("a"))).synth(),
         ty_bool()
-    )
+    );
 }
 
 /// ((let newid = λx.x in newid) "Test"): String
 #[test]
 fn let_fn() {
+    println!();
+    println!();
     assert_eq!(
-        app(let_in("newid", abs("x", var("x")), var("newid")), lit_str()).synth(),
+        application(let_in("newid", abs("x", var("x")), var("newid")), lit_str()).synth(),
         ty_str()
     );
 }
 
-fn app(e0: Expr, e1: Expr) -> Expr {
+fn application(e0: Expr, e1: Expr) -> Expr {
     Expr::App(e0.into(), e1.into())
 }
 
-fn let_in(x: &str, e0: Expr, e1: Expr) -> Expr {
-    Expr::Let(x.into(), e0.into(), e1.into())
+fn let_in(x: &'static str, e0: Expr, e1: Expr) -> Expr {
+    Expr::Let(Name::with_name(x), e0.into(), e1.into())
 }
 
-fn abs(x: &str, e: Expr) -> Expr {
-    Expr::Abs(x.into(), e.into())
+fn abs(x: &'static str, e: Expr) -> Expr {
+    Expr::Abs(Name::with_name(x), e.into())
 }
 
-fn var(x: &str) -> Expr {
-    Expr::Var(x.into())
+fn var(x: &'static str) -> Expr {
+    Expr::Var(Name::with_name(x))
 }
 
 /// (λx.x): ∀t.t->t
@@ -941,7 +983,7 @@ fn lit_str() -> Expr {
     Expr::Lit(Lit::String("Test".into()))
 }
 
-fn lit_bool() -> Expr {
+const fn lit_bool() -> Expr {
     Expr::Lit(Lit::Bool(true))
 }
 
@@ -950,14 +992,14 @@ fn tuple(e0: Expr, e1: Expr) -> Expr {
 }
 
 fn ann(e: Expr, t: Type) -> Expr {
-    Expr::Ann(e.into(), t.into())
+    Expr::Ann(e.into(), t)
 }
 
-fn ty_str() -> Type {
+const fn ty_str() -> Type {
     Type::Lit(LitType::String)
 }
 
-fn ty_bool() -> Type {
+const fn ty_bool() -> Type {
     Type::Lit(LitType::Bool)
 }
 
@@ -969,21 +1011,23 @@ fn ty_fun(t0: Type, t1: Type) -> Type {
     Type::Fun(t0.into(), t1.into())
 }
 
-fn ty_existential(ex: &str) -> Type {
-    Type::Exists(ex.into())
+fn ty_existential(ex: &'static str) -> Type {
+    Type::Exists(Name::with_name(ex))
 }
 
-fn ty_var(x: &str) -> Type {
-    Type::Var(x.into())
+fn ty_var(x: &'static str) -> Type {
+    Type::Var(Name::with_name(x))
 }
 
-fn ty_forall(x: &str, t: Type) -> Type {
-    Type::Forall(x.into(), t.into())
+fn ty_forall(x: &'static str, t: Type) -> Type {
+    Type::Forall(Name::with_name(x), t.into())
 }
 
 impl Expr {
     fn synth(self) -> Type {
         let (t, ctx) = synthesizes_to(&mut State::default(), &Ctx::default(), &self);
+        println!();
+        println!();
         println!("-------------------RESULTS-------------------");
         println!("{} in context {}", t, ctx);
         let t = apply_context(t, &ctx);
@@ -994,4 +1038,4 @@ impl Expr {
     }
 }
 
-fn main() {}
+const fn main() {}
