@@ -101,7 +101,7 @@ impl<T> Graph<T> {
     }
     pub fn add_edge(&mut self, from: &VertexId, to: &VertexId) {
         assert!(
-            !(from.0 <= VertexId::MAX || to.0 <= VertexId::MAX),
+            !(from.0 >= VertexId::MAX || to.0 >= VertexId::MAX),
             "Graph is full!"
         );
         if from == to {
