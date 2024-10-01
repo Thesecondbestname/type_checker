@@ -1,58 +1,32 @@
 #![allow(dead_code)]
+mod graph;
 mod typecheck;
 
-use std::fmt;
-
-#[derive(Clone, Debug, Default)]
-enum Constraint {
-    #[default]
-    Unsolved,
-    Conjunction(Box<Self>, Box<Self>),
-    Eq(Type),
-    TypeClass(String, Vec<Type>),
-    Empty, // Implication
+pub struct Graph<T> {
+    verteces: Vec<Vertex<T>>,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum LitType {
-    Unit,
-    Char,
-    String,
-    Int,
-    Float,
-    Bool,
+pub struct Vertex<T> {
+    data: Option<T>,
 }
-
-impl fmt::Display for LitType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
-        match self {
-            Self::Unit => write!(f, "()"),
-            Self::Char => write!(f, "Char"),
-            Self::String => write!(f, "String"),
-            Self::Int => write!(f, "Int"),
-            Self::Float => write!(f, "Float"),
-            Self::Bool => write!(f, "Bool"),
-        }
+impl<T> Default for Vertex<T> {
+    fn default() -> Self {
+        Self { data: None }
     }
 }
-/// Figure 6
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Type {
-    /// Literal type
-    Lit(LitType),
-    /// Signifies that the variable exists
-    Exists,
-    /// Forall quantifier
-    Forall(TypeId, Box<Type>),
-    /// Function type
-    Fun(Box<Type>, Box<Type>),
-    /// Tuple type
-    Tup(Box<Type>, Box<Type>),
-}
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
-struct TypeId(usize);
-impl Into<usize> for TypeId {
-    fn into(self) -> usize {
-        self.0
-    }
+
+#[test]
+fn test_eq() {
+    let mut g = graph::Graph::new();
+    let node0 = g.add_node(graph::Vertex::new(0));
+    let node1 = g.add_node(graph::Vertex::new(1));
+    let node2 = g.add_node(graph::Vertex::new(2));
+    let node2 = g.add_node(graph::Vertex::new(1));
+    g.add_edge(&node0, &node1);
+    g.add_edge(&node0, &node2);
+    g.add_edge(&node1, &node0);
+    g.add_edge(&node1, &node2);
+    g.add_edge(&node2, &node0);
+    g.add_edge(&node2, &node1);
+    g.print_graph();
+    panic!();
 }

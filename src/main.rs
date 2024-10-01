@@ -406,7 +406,7 @@ fn synthesizes_to(state: &mut State, ctx0: &Ctx, e: &Expr) -> (Type, Ctx) {
             let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1))
                 .drop(CtxElem::TypedVar(*x, Type::Exists(ex0)));
             return (
-                Type::Fun(Type::Exists(ex0).into(), Type::Exists(ex1.clone()).into()),
+                Type::Fun(Type::Exists(ex0).into(), Type::Exists(ex1).into()),
                 ctx2,
             );
         }
@@ -445,19 +445,16 @@ fn application_synthesizes_to(state: &mut State, ctx0: &Ctx, t: &Type, e: &Expr)
             let ctx1 = ctx0.insert_in_place(
                 CtxElem::Exists(*ex0),
                 vector![
-                    CtxElem::Exists(ex2.clone()),
-                    CtxElem::Exists(ex1.clone()),
+                    CtxElem::Exists(ex2),
+                    CtxElem::Exists(ex1),
                     CtxElem::Solved(
                         *ex0,
-                        Type::Fun(
-                            Type::Exists(ex1.clone()).into(),
-                            Type::Exists(ex2.clone()).into(),
-                        ),
+                        Type::Fun(Type::Exists(ex1).into(), Type::Exists(ex2).into(),),
                     ),
                 ],
             );
-            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1.clone()));
-            return (Type::Exists(ex2.clone()), ctx2);
+            let ctx2 = checks_against(state, &ctx1, e, &Type::Exists(ex1));
+            return (Type::Exists(ex2), ctx2);
         }
         // ∀App
         Type::Forall(a0, t0) => {
@@ -502,9 +499,8 @@ fn occurs_in(x: Name, a: &Type) -> bool {
         Type::Forall(a, t) => {
             if x == *a {
                 return true;
-            } else {
-                return occurs_in(x, t);
             }
+            return occurs_in(x, t);
         }
         Type::Exists(ex) => x == *ex,
         Type::Tup(t0, t1) => occurs_in(x, t0) || occurs_in(x, t1),
@@ -818,223 +814,233 @@ fn print_helper(fun: &str, c1: String, c2: String, context: &Ctx) {
 fn print_rule(rule: &str) {
     println!("{rule:>20}");
 }
+mod test {
+    use crate::apply_context;
+    use crate::synthesizes_to;
+    use crate::Ctx;
+    use crate::Expr;
+    use crate::Lit;
+    use crate::Name;
+    use crate::State;
+    use crate::{LitType, Type};
 
-/// "Test": String
-#[test]
-fn basic() {
-    println!();
-    println!();
-    assert_eq!(lit_str().synth(), Type::Lit(LitType::String));
-}
+    /// "Test": String
+    #[test]
+    fn basic() {
+        println!();
+        println!();
+        assert_eq!(lit_str().synth(), Type::Lit(LitType::String));
+    }
 
-/// (λx.x) "Test": String
-#[test]
-fn application_string() {
-    println!();
-    println!();
-    assert_eq!(application(abs("x", var("x")), lit_str()).synth(), ty_str());
-}
+    /// (λx.x) "Test": String
+    #[test]
+    fn application_string() {
+        println!();
+        println!();
+        assert_eq!(application(abs("x", var("x")), lit_str()).synth(), ty_str());
+    }
 
-/// (λx.x) true: bool
-#[test]
-fn application_bool() {
-    println!();
-    println!();
-    assert_eq!(
-        application(abs("x", var("x")), lit_bool()).synth(),
-        ty_bool()
-    );
-}
+    /// (λx.x) true: bool
+    #[test]
+    fn application_bool() {
+        println!();
+        println!();
+        assert_eq!(
+            application(abs("x", var("x")), lit_bool()).synth(),
+            ty_bool()
+        );
+    }
 
-/// λx.x: 't0->'t0
-#[test]
-fn lambda() {
-    println!();
-    println!();
-    assert_eq!(
-        abs("x", var("x")).synth(),
-        ty_fun(ty_existential("t0"), ty_existential("t0"))
-    );
-}
+    /// λx.x: 't0->'t0
+    #[test]
+    fn lambda() {
+        println!();
+        println!();
+        assert_eq!(
+            abs("x", var("x")).synth(),
+            ty_fun(ty_existential("t0"), ty_existential("t0"))
+        );
+    }
 
-/// (λx.x) "Test": String
-#[test]
-fn idunit() {
-    println!();
-    println!();
-    assert_eq!(application(id(), lit_str()).synth(), ty_str());
-}
+    /// (λx.x) "Test": String
+    #[test]
+    fn idunit() {
+        println!();
+        println!();
+        assert_eq!(application(id(), lit_str()).synth(), ty_str());
+    }
 
-/// ("Test" × true): (String × Bool)
-#[test]
-fn tuples() {
-    println!();
-    println!();
-    assert_eq!(
-        tuple(lit_str(), lit_bool()).synth(),
-        ty_tuple(ty_str(), ty_bool())
-    );
-}
+    /// ("Test" × true): (String × Bool)
+    #[test]
+    fn tuples() {
+        println!();
+        println!();
+        assert_eq!(
+            tuple(lit_str(), lit_bool()).synth(),
+            ty_tuple(ty_str(), ty_bool())
+        );
+    }
 
-/// (λx.(x × x)) "Test": (String × String)
-#[test]
-fn tuples_in_lambda() {
-    println!();
-    println!();
-    assert_eq!(
-        application(abs("x", tuple(var("x"), var("x"))), lit_str()).synth(),
-        ty_tuple(ty_str(), ty_str())
-    );
-}
+    /// (λx.(x × x)) "Test": (String × String)
+    #[test]
+    fn tuples_in_lambda() {
+        println!();
+        println!();
+        assert_eq!(
+            application(abs("x", tuple(var("x"), var("x"))), lit_str()).synth(),
+            ty_tuple(ty_str(), ty_str())
+        );
+    }
 
-/// ((λx.(x × (x × x))) "Test"): (String × (String × String))
-#[test]
-fn nested_tuples() {
-    println!();
-    println!();
-    assert_eq!(
-        application(
-            abs("x", tuple(var("x"), tuple(var("x"), var("x")))),
-            lit_str()
-        )
-        .synth(),
-        ty_tuple(ty_str(), ty_tuple(ty_str(), ty_str()))
-    );
-}
-
-/// ((λx.x) ("Test" × true)): (String × bool)
-#[test]
-fn tuples_in_fn() {
-    println!();
-    println!();
-    assert_eq!(
-        application(id(), tuple(lit_str(), lit_bool())).synth(),
-        ty_tuple(ty_str(), ty_bool())
-    );
-}
-
-/// (let newid = λx.x in ((newid "Test") × (newid true))): (String × bool)
-#[test]
-fn generalised_let() {
-    println!();
-    println!();
-    assert_eq!(
-        let_in(
-            "newid",
-            id(),
-            // Without annotation, e.g. abs("x", var("x")) It fails.
-            tuple(
-                application(var("newid"), lit_str()),
-                application(var("newid"), lit_bool())
+    /// ((λx.(x × (x × x))) "Test"): (String × (String × String))
+    #[test]
+    fn nested_tuples() {
+        println!();
+        println!();
+        assert_eq!(
+            application(
+                abs("x", tuple(var("x"), tuple(var("x"), var("x")))),
+                lit_str()
             )
+            .synth(),
+            ty_tuple(ty_str(), ty_tuple(ty_str(), ty_str()))
+        );
+    }
+
+    /// ((λx.x) ("Test" × true)): (String × bool)
+    #[test]
+    fn tuples_in_fn() {
+        println!();
+        println!();
+        assert_eq!(
+            application(id(), tuple(lit_str(), lit_bool())).synth(),
+            ty_tuple(ty_str(), ty_bool())
+        );
+    }
+
+    /// (let newid = λx.x in ((newid "Test") × (newid true))): (String × bool)
+    #[test]
+    fn generalised_let() {
+        println!();
+        println!();
+        assert_eq!(
+            let_in(
+                "newid",
+                id(),
+                // Without annotation, e.g. abs("x", var("x")) It fails.
+                tuple(
+                    application(var("newid"), lit_str()),
+                    application(var("newid"), lit_bool())
+                )
+            )
+            .synth(),
+            ty_tuple(ty_str(), ty_bool())
+        );
+    }
+
+    /// (let a = true in id a): bool
+    #[test]
+    fn let_binding() {
+        println!();
+        println!();
+        assert_eq!(
+            let_in("a", lit_bool(), application(id(), var("a"))).synth(),
+            ty_bool()
+        );
+    }
+
+    /// ((let newid = λx.x in newid) "Test"): String
+    #[test]
+    fn let_fn() {
+        println!();
+        println!();
+        assert_eq!(
+            application(let_in("newid", abs("x", var("x")), var("newid")), lit_str()).synth(),
+            ty_str()
+        );
+    }
+
+    fn application(e0: Expr, e1: Expr) -> Expr {
+        Expr::App(e0.into(), e1.into())
+    }
+
+    fn let_in(x: &'static str, e0: Expr, e1: Expr) -> Expr {
+        Expr::Let(Name::with_name(x), e0.into(), e1.into())
+    }
+
+    fn abs(x: &'static str, e: Expr) -> Expr {
+        Expr::Abs(Name::with_name(x), e.into())
+    }
+
+    fn var(x: &'static str) -> Expr {
+        Expr::Var(Name::with_name(x))
+    }
+
+    /// (λx.x): ∀t.t->t
+    fn id() -> Expr {
+        ann(
+            abs("x", var("x")),
+            ty_forall("t", ty_fun(ty_var("t"), ty_var("t"))),
         )
-        .synth(),
-        ty_tuple(ty_str(), ty_bool())
-    );
-}
+    }
 
-/// (let a = true in id a): bool
-#[test]
-fn let_binding() {
-    println!();
-    println!();
-    assert_eq!(
-        let_in("a", lit_bool(), application(id(), var("a"))).synth(),
-        ty_bool()
-    );
-}
+    fn lit_str() -> Expr {
+        Expr::Lit(Lit::String("Test".into()))
+    }
 
-/// ((let newid = λx.x in newid) "Test"): String
-#[test]
-fn let_fn() {
-    println!();
-    println!();
-    assert_eq!(
-        application(let_in("newid", abs("x", var("x")), var("newid")), lit_str()).synth(),
-        ty_str()
-    );
-}
+    const fn lit_bool() -> Expr {
+        Expr::Lit(Lit::Bool(true))
+    }
 
-fn application(e0: Expr, e1: Expr) -> Expr {
-    Expr::App(e0.into(), e1.into())
-}
+    fn tuple(e0: Expr, e1: Expr) -> Expr {
+        Expr::Tup(e0.into(), e1.into())
+    }
 
-fn let_in(x: &'static str, e0: Expr, e1: Expr) -> Expr {
-    Expr::Let(Name::with_name(x), e0.into(), e1.into())
-}
+    fn ann(e: Expr, t: Type) -> Expr {
+        Expr::Ann(e.into(), t)
+    }
 
-fn abs(x: &'static str, e: Expr) -> Expr {
-    Expr::Abs(Name::with_name(x), e.into())
-}
+    const fn ty_str() -> Type {
+        Type::Lit(LitType::String)
+    }
 
-fn var(x: &'static str) -> Expr {
-    Expr::Var(Name::with_name(x))
-}
+    const fn ty_bool() -> Type {
+        Type::Lit(LitType::Bool)
+    }
 
-/// (λx.x): ∀t.t->t
-fn id() -> Expr {
-    ann(
-        abs("x", var("x")),
-        ty_forall("t", ty_fun(ty_var("t"), ty_var("t"))),
-    )
-}
+    fn ty_tuple(t0: Type, t1: Type) -> Type {
+        Type::Tup(t0.into(), t1.into())
+    }
 
-fn lit_str() -> Expr {
-    Expr::Lit(Lit::String("Test".into()))
-}
+    fn ty_fun(t0: Type, t1: Type) -> Type {
+        Type::Fun(t0.into(), t1.into())
+    }
 
-const fn lit_bool() -> Expr {
-    Expr::Lit(Lit::Bool(true))
-}
+    fn ty_existential(ex: &'static str) -> Type {
+        Type::Exists(Name::with_name(ex))
+    }
 
-fn tuple(e0: Expr, e1: Expr) -> Expr {
-    Expr::Tup(e0.into(), e1.into())
-}
+    fn ty_var(x: &'static str) -> Type {
+        Type::Var(Name::with_name(x))
+    }
 
-fn ann(e: Expr, t: Type) -> Expr {
-    Expr::Ann(e.into(), t)
-}
+    fn ty_forall(x: &'static str, t: Type) -> Type {
+        Type::Forall(Name::with_name(x), t.into())
+    }
 
-const fn ty_str() -> Type {
-    Type::Lit(LitType::String)
-}
-
-const fn ty_bool() -> Type {
-    Type::Lit(LitType::Bool)
-}
-
-fn ty_tuple(t0: Type, t1: Type) -> Type {
-    Type::Tup(t0.into(), t1.into())
-}
-
-fn ty_fun(t0: Type, t1: Type) -> Type {
-    Type::Fun(t0.into(), t1.into())
-}
-
-fn ty_existential(ex: &'static str) -> Type {
-    Type::Exists(Name::with_name(ex))
-}
-
-fn ty_var(x: &'static str) -> Type {
-    Type::Var(Name::with_name(x))
-}
-
-fn ty_forall(x: &'static str, t: Type) -> Type {
-    Type::Forall(Name::with_name(x), t.into())
-}
-
-impl Expr {
-    fn synth(self) -> Type {
-        let (t, ctx) = synthesizes_to(&mut State::default(), &Ctx::default(), &self);
-        println!();
-        println!();
-        println!("-------------------RESULTS-------------------");
-        println!("{} in context {}", t, ctx);
-        let t = apply_context(t, &ctx);
-        println!("Applied: {}", t);
-        // println!("{}", expression);
-        println!("-------------------");
-        t
+    impl Expr {
+        fn synth(self) -> Type {
+            let (t, ctx) = synthesizes_to(&mut State::default(), &Ctx::default(), &self);
+            println!();
+            println!();
+            println!("-------------------RESULTS-------------------");
+            println!("{} in context {}", t, ctx);
+            let t = apply_context(t, &ctx);
+            println!("Applied: {}", t);
+            // println!("{}", expression);
+            println!("-------------------");
+            t
+        }
     }
 }
 

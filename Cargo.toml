@@ -6,3 +6,4 @@ edition = "2018"
 
 [dependencies]
 im-rc = { version = "15.0.0" }
+bitset = {path = "bitset/"}
