@@ -1,9 +1,6 @@
 [package]
-name = "bidirectional_typeinference"
+name = "type_checker"
 version = "0.1.0"
-authors = ["Jakob Demler <jdemler@curry-software.com>"]
-edition = "2018"
+edition = "2024"
 
 [dependencies]
-im-rc = { version = "15.0.0" }
-bitset = {path = "bitset/"}
