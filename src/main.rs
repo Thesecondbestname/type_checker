@@ -292,6 +292,79 @@ fn instantiate_l(state: &mut State, ctx: &Context, α_hat: String, ty: &Type) ->
         ),
     }
 }
+fn check(state: &mut State, ctx: &Context, e: Term, ty: Type) -> Context {
+    match (e, ty) {
+        (Term::Unit, Type::Unit) => ctx.clone(),
+        (e, Type::Quantification(name, ty)) => {
+            let extendet_gamma = ctx.extend(ContextElement::Existential(name.clone()));
+            check(state, &extendet_gamma, e, *ty).drop(ContextElement::Existential(name))
+        }
+        (Term::Abstraction(alpha, term), Type::Function(a, b)) => {
+            let solved = ContextElement::Solved(alpha.clone(), *a);
+            let extended_gamma = ctx.extend(solved.clone());
+            check(state, &extended_gamma, *term, *b).drop(solved)
+        }
+        (e, ty) => {
+            let (a, theta) = synth(state, ctx, e);
+            subtype(
+                state,
+                &theta,
+                &apply_context(&theta, a),
+                &apply_context(&theta, ty),
+            )
+        }
+    }
+}
+fn synth(state: &mut State, ctx: &Context, e: Term) -> (Type, Context) {
+    match e {
+        Term::Variable(name) => (
+            ctx.get_solved(&name)
+                .expect("variable {name} not sufficiently annotated")
+                .clone(),
+            ctx.clone(),
+        ),
+        Term::Unit => (Type::Unit, ctx.clone()),
+        Term::Abstraction(x, e) => {
+            let alpha = state.fresh_existential();
+            let beta = state.fresh_existential();
+            let solved = ContextElement::Solved(alpha.clone(), Type::Existential(x));
+            let extended_gamma = ctx
+                .extend(ContextElement::Existential(alpha.clone()))
+                .extend(ContextElement::Existential(alpha.clone()))
+                .extend(solved.clone());
+            (
+                Type::Function(
+                    Box::new(Type::Existential(alpha)),
+                    Box::new(Type::Existential(beta.clone())),
+                ),
+                check(state, &extended_gamma, *e, Type::Existential(beta)).drop(solved.clone()),
+            )
+        }
+        Term::Annotation(term, ty) => (*ty.clone(), check(state, ctx, *term, *ty)),
+        Term::Application(term, term1) => {
+            let (a, theta) = synth(state, ctx, *term);
+            synth_function(state, &theta, &apply_context(&theta, a), *term1)
+        }
+    }
+}
+fn synth_function(state: &mut State, ctx: &Context, a: &Type, e: Term) -> (Type, Context) {
+    match a {
+        Type::Existential(_) => todo!(),
+        Type::Unit => todo!(),
+        Type::Variable(_) => todo!(),
+        Type::Quantification(alpha, ty) => {
+            let alpha_hat = state.fresh_existential();
+            let extendet_gamma = ctx.extend(ContextElement::Existential(alpha_hat.clone()));
+            synth_function(
+                state,
+                &extendet_gamma,
+                &substitute_existential(&alpha_hat, &Type::Variable(alpha.to_string()), ty),
+                e,
+            )
+        }
+        Type::Function(a, c) => (*a.clone(), check(state, ctx, e, *a.clone())),
+    }
+}
 /// Under input context ctx, type A is a subtype of B
 fn subtype(state: &mut State, ctx: &Context, ty: &Type, ty2: &Type) -> Context {
     match (ty, ty2) {
@@ -340,7 +413,7 @@ fn subtype(state: &mut State, ctx: &Context, ty: &Type, ty2: &Type) -> Context {
             let delta = subtype(
                 state,
                 &theta,
-                &substitute_existential(name, &Type::Existential(a_hat), a),
+                &substitute_existential(name, &Type::Variable(a_hat), a),
                 b,
             );
             delta.drop(ContextElement::Variable(name.to_string()))
