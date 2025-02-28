@@ -201,46 +201,88 @@ impl Context {
 }
 /// instantiate ^α to a supertype of A
 fn instantiate_r(state: &mut State, ctx: &Context, α_hat: String, ty: &Type) -> Context {
-    ctx.clone()
-}
-/// instantiate ^α to a subtype of A
-fn instantiate_l(state: &mut State, ctx: &Context, α_hat: String, ty: &Type) -> Context {
     let mut α = ContextElement::Existential(α_hat.clone());
     let (l, r) = ctx.split_at(&α);
-    if ty.is_monotype() && is_well_formed(ctx, ty) {
+    if ty.is_monotype() && is_well_formed(&l, ty) {
         return ctx.insert_at(&α, vec![ContextElement::Solved(α_hat, ty.clone())]);
     }
     match ty {
         Type::Existential(beta) => {
-            assert!(is_well_formed(ctx, ty));
-            ctx.insert_at(
-                &ContextElement::Existential(beta.to_string()),
-                vec![ContextElement::Solved(α_hat, ty.clone())],
-            )
+            assert!(is_well_formed(&r, ty));
+            ctx.insert_at(&ContextElement::Existential(beta.to_string()), vec![
+                ContextElement::Solved(α_hat, ty.clone()),
+            ])
         }
         Type::Quantification(beta, ty) => {
-            let extended_gamma = ctx.extend(ContextElement::Variable(beta.to_string()));
-            let delta_prime = instantiate_l(state, &extended_gamma, α_hat, ty);
-            let delta = delta_prime.drop(ContextElement::Variable(beta.to_string()));
+            let beta_hat = state.fresh_existential();
+            let extended_gamma = ctx
+                .extend(ContextElement::Marker(beta.to_string()))
+                .extend(ContextElement::Existential(beta_hat.clone()));
+            let delta_prime = instantiate_r(
+                state,
+                &extended_gamma,
+                α_hat,
+                &substitute_existential(&beta_hat, &Type::Variable(beta.to_string()), ty),
+            );
+            let delta = delta_prime.drop(ContextElement::Marker(beta.to_string()));
             return delta;
         }
         Type::Function(a, b) => {
             let α_hat1 = state.fresh_existential();
             let α_hat2 = state.fresh_existential();
-            let extended_gamma = ctx.insert_at(
-                &α,
-                vec![
-                    ContextElement::Existential(α_hat1.clone()),
-                    ContextElement::Existential(α_hat2.clone()),
-                    ContextElement::Solved(
-                        α_hat,
-                        Type::Function(
-                            Box::new(Type::Existential(α_hat1.clone())),
-                            Box::new(Type::Existential(α_hat2.clone())),
-                        ),
+            let extended_gamma = ctx
+                .extend(ContextElement::Existential(α_hat1.clone()))
+                .extend(ContextElement::Existential(α_hat2.clone()))
+                .extend(ContextElement::Solved(
+                    α_hat,
+                    Type::Function(
+                        Box::new(Type::Existential(α_hat1.clone())),
+                        Box::new(Type::Existential(α_hat2.clone())),
                     ),
-                ],
-            );
+                ));
+            let theta = instantiate_l(state, &extended_gamma, α_hat1, a);
+            let delta = instantiate_r(state, &theta, α_hat2, &apply_context(&theta, *b.clone()));
+            return delta;
+        }
+        t => panic!(
+            "Failed to handle {t}, either is_well_formed has a problem or i need to handle more cases"
+        ),
+    }
+}
+/// instantiate ^α to a subtype of A
+fn instantiate_l(state: &mut State, ctx: &Context, α_hat: String, ty: &Type) -> Context {
+    let mut α = ContextElement::Existential(α_hat.clone());
+    let (l, r) = ctx.split_at(&α);
+    if ty.is_monotype() && is_well_formed(&l, ty) {
+        return ctx.insert_at(&α, vec![ContextElement::Solved(α_hat, ty.clone())]);
+    }
+    match ty {
+        Type::Existential(beta) => {
+            assert!(is_well_formed(&r, ty));
+            ctx.insert_at(&ContextElement::Existential(beta.to_string()), vec![
+                ContextElement::Solved(α_hat, ty.clone()),
+            ])
+        }
+        Type::Quantification(beta, ty) => {
+            let beta_hat = state.fresh_existential();
+            let extended_gamma = ctx.extend(ContextElement::Existential(beta_hat));
+            let delta_prime = instantiate_l(state, &extended_gamma, α_hat, ty);
+            let delta = delta_prime.drop(ContextElement::Existential(beta.to_string()));
+            return delta;
+        }
+        Type::Function(a, b) => {
+            let α_hat1 = state.fresh_existential();
+            let α_hat2 = state.fresh_existential();
+            let extended_gamma = ctx
+                .extend(ContextElement::Existential(α_hat1.clone()))
+                .extend(ContextElement::Existential(α_hat2.clone()))
+                .extend(ContextElement::Solved(
+                    α_hat,
+                    Type::Function(
+                        Box::new(Type::Existential(α_hat1.clone())),
+                        Box::new(Type::Existential(α_hat2.clone())),
+                    ),
+                ));
             let theta = instantiate_r(state, &extended_gamma, α_hat1, a);
             let delta = instantiate_l(state, &theta, α_hat2, &apply_context(&theta, *b.clone()));
             return delta;
@@ -248,10 +290,9 @@ fn instantiate_l(state: &mut State, ctx: &Context, α_hat: String, ty: &Type) ->
         t => panic!(
             "Failed to handle {t}, either is_well_formed has a problem or i need to handle more cases"
         ),
-    };
-    l
+    }
 }
-///
+/// Under input context ctx, type A is a subtype of B
 fn subtype(state: &mut State, ctx: &Context, ty: &Type, ty2: &Type) -> Context {
     match (ty, ty2) {
         (Type::Unit, Type::Unit) => ctx.clone(),
