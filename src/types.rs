@@ -1,10 +1,15 @@
 use core::fmt;
+use std::fmt::Write;
 pub(crate) enum Term {
     Variable(String),
     Unit,
     Abstraction(String, Box<Term>),
     Application(Box<Term>, Box<Term>),
     Annotation(Box<Term>, Box<Type>),
+    LitInt(usize),
+    LitBool(bool),
+    Functor(String, Box<Term>),
+    Let(String, Box<Term>, Box<Term>),
 }
 /// 1 | α | ^α | ∀α. A | A → B
 #[derive(PartialEq, Debug, Clone, Eq)]
@@ -20,7 +25,9 @@ pub(crate) enum Type {
     /// A → B
     Function(Box<Type>, Box<Type>),
     /// Named Type
-    Constructor(String),
+    BaseType(String),
+    /// F[_]
+    HigherKinded(Vec<Type>),
 }
 /// Θ ::= · | Γ, α | Γ, x : A | Γ, ^α | Γ, ^α = τ | Γ, I^
 #[derive(PartialEq, Debug, Clone, Eq)]
@@ -43,6 +50,11 @@ pub(crate) struct Context {
 }
 
 struct Existential(usize);
+#[derive(Debug)]
+pub(crate) enum CheckingError {
+    UnannotatedVariable(String),
+    DoubelyInitializedVariable(String),
+}
 impl fmt::Display for Context {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "[").unwrap();
@@ -59,10 +71,10 @@ impl fmt::Display for Context {
 impl fmt::Display for ContextElement {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Self::Variable(var) => write!(f, "{}", var),
-            Self::Existential(ex) => write!(f, "'{}", ex),
-            Self::Solved(a, ty) => write!(f, "'{}: {}", a, ty),
-            Self::TypedVariable(x, ty) => write!(f, "{}: {}", x, ty),
+            ContextElement::Variable(var) => write!(f, "{}", var),
+            ContextElement::Existential(ex) => write!(f, "'{}", ex),
+            ContextElement::Solved(a, ty) => write!(f, "'{}: {}", a, ty),
+            ContextElement::TypedVariable(x, ty) => write!(f, "{}: {}", x, ty),
         }
     }
 }
@@ -70,11 +82,15 @@ impl fmt::Display for ContextElement {
 impl fmt::Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Self::Unit => write!(f, "()"),
-            Self::Variable(var) => write!(f, "{}", var),
-            Self::Abstraction(alpha, e) => write!(f, "(\\{} -> {})", alpha, e),
-            Self::Application(e1, e2) => write!(f, "{} {}", e1, e2),
-            Self::Annotation(e, a) => write!(f, "({}: {})", e, a),
+            Term::Unit => write!(f, "()"),
+            Term::Variable(var) => write!(f, "{}", var),
+            Term::Abstraction(alpha, e) => write!(f, "(\\{} -> {})", alpha, e),
+            Term::Application(e1, e2) => write!(f, "{} {}", e1, e2),
+            Term::Annotation(e, a) => write!(f, "({}: {})", e, a),
+            Term::LitBool(b) => write!(f, "{b}"),
+            Term::LitInt(i) => write!(f, "{i}"),
+            Term::Functor(name, term) => write!(f, "{name}{{{term}}}"),
+            Term::Let(name, term, term1) => write!(f, "let {name} = {term} in {term1}"),
         }
     }
 }
@@ -86,7 +102,16 @@ impl fmt::Display for Type {
             Self::Existential(ex) => write!(f, "'{ex}"),
             Self::Quantification(a, ty) => write!(f, "(∀{a}. {ty})"),
             Self::Function(a, c) => write!(f, "({a} -> {c})"),
-            Type::Constructor(id) => write!(f, "{id}"),
+            Type::BaseType(name) => write!(f, "{name}"),
+            Self::HigherKinded(generics) => write!(
+                f,
+                "F[{}]",
+                generics
+                    .iter()
+                    .map(|a| a.to_string())
+                    .reduce(|acc, e| acc + &e)
+                    .unwrap_or_default()
+            ),
         }
     }
 }

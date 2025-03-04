@@ -2,7 +2,9 @@
 #![allow(clippy::uninlined_format_args)]
 mod types;
 
+use core::panic;
 use std::mem;
+use types::CheckingError;
 use types::Context;
 use types::ContextElement;
 use types::Term;
@@ -23,7 +25,7 @@ impl Context {
     }
     fn is_well_formed(&self, ty: &Type) -> bool {
         match ty {
-            Type::Unit | Type::Constructor(_) => true,
+            Type::Unit | Type::BaseType(_) => true,
             Type::Variable(var) => self.contains(ContextElement::Variable(var.to_string())),
             Type::Existential(alpha_hat) => {
                 self.contains(ContextElement::Existential(alpha_hat.to_string()))
@@ -34,10 +36,14 @@ impl Context {
                 .extend(ContextElement::Existential(alpha_hat.to_string()))
                 .is_well_formed(ty),
             Type::Function(a, b) => self.is_well_formed(a) && self.is_well_formed(b),
+            Type::HigherKinded(vec) => vec.iter().all(|ty| self.is_well_formed(ty)),
         }
     }
     fn contains(&self, c: ContextElement) -> bool {
         self.elements.iter().any(|elem| elem == &c)
+    }
+    fn any_matches<F: FnMut(&ContextElement) -> bool>(&self, f: F) -> bool {
+        self.elements.iter().any(f)
     }
     fn mark_scope(mut self) -> Self {
         self.markers.push(self.elements.len());
@@ -214,56 +220,73 @@ impl Direction {
     }
 }
 
-fn check(e: Term, ty: Type, ctx: Context) -> Context {
+fn check(e: Term, ty: Type, ctx: Context) -> Result<Context, (CheckingError, Context)> {
     println!("checking that {e} has type {ty} under context {ctx}");
     match (e, ty) {
         (Term::Unit, Type::Unit) => {
             println!("{:>20}", "1I");
-            ctx
+            Ok(ctx)
         }
         (e, Type::Quantification(name, ty)) => {
             println!("{:>20}", "∀I");
             let mut extendet_gamma = ctx
                 .mark_scope()
                 .extend(ContextElement::Variable(name.clone()));
-            check(e, *ty, extendet_gamma).drop_scope()
+            let delta = check(e, *ty, extendet_gamma)?.drop_scope();
+            return Ok(delta);
         }
         (Term::Abstraction(alpha, term), Type::Function(a, b)) => {
             println!("{:>20}", "->I");
             let typed = ContextElement::TypedVariable(alpha, *a);
             let extended_gamma = ctx.mark_scope().extend(typed.clone());
-            check(*term, *b, extended_gamma).drop_scope()
+            let delta = check(*term, *b, extended_gamma)?.drop_scope();
+            return Ok(delta);
+        }
+        (Term::Let(name, expr, tail), ty) => {
+            if ctx.any_matches(
+                |elem| matches!(elem, ContextElement::TypedVariable(name1, _) if *name1 == name),
+            ) {
+                panic!("Initialized variable twice");
+            }
+            let (a, theta) = synth(*expr, ctx)?;
+            let delta = check(
+                *tail,
+                ty,
+                theta.extend(ContextElement::TypedVariable(name, a)),
+            );
+            return delta;
         }
         (e, ty) => {
             println!("{:>20}", "Sub");
-            let (a, mut theta) = synth(e, ctx);
-            subtype(&apply_context(&theta, a), &apply_context(&theta, ty), theta)
+            let (a, theta) = synth(e, ctx)?;
+            Ok(subtype(
+                &apply_context(&theta, a),
+                &apply_context(&theta, ty),
+                theta,
+            ))
         }
     }
 }
-fn synth(e: Term, mut ctx: Context) -> (Type, Context) {
+fn synth(e: Term, mut ctx: Context) -> Result<(Type, Context), (CheckingError, Context)> {
     println!("synthesizing Type for {e} under context {ctx}");
     match e {
         Term::Variable(name) => {
-            {
-                let rule: &str = "Var";
-                println!("{:>20}", rule);
-            };
-            (
-                ctx.get_annotation(&name)
-                    .unwrap_or_else(|| panic!("variable {name} not sufficiently annotated"))
-                    .clone(),
-                ctx,
-            )
+            println!("{:>20}", "Var");
+            let annot = ctx.get_annotation(&name);
+            if let Some(ty) = annot {
+                Ok((ty.clone(), ctx))
+            } else {
+                Err((CheckingError::UnannotatedVariable(name), ctx))
+            }
         }
+        Term::LitInt(_) => Ok((Type::BaseType("int".to_owned()), ctx)),
+        Term::LitBool(_) => Ok((Type::BaseType("bool".to_owned()), ctx)),
         Term::Unit => {
             println!("{:>20}", "1I=>");
-            (Type::Unit, ctx.clone())
+            Ok((Type::Unit, ctx.clone()))
         }
         Term::Abstraction(x, e) => {
-            {
-                println!("{:>20}", "->I=>");
-            };
+            println!("{:>20}", "->I=>");
             let alpha = ctx.fresh_existential();
             let beta = ctx.fresh_existential();
             let typed =
@@ -273,26 +296,44 @@ fn synth(e: Term, mut ctx: Context) -> (Type, Context) {
                 .extend(ContextElement::Existential(beta.clone()))
                 .mark_scope()
                 .extend(typed.clone());
-            (
+            Ok((
                 Type::Function(
                     Box::new(Type::Existential(alpha)),
                     Box::new(Type::Existential(beta.clone())),
                 ),
-                check(*e, Type::Existential(beta), extended_gamma).drop_scope(),
-            )
+                check(*e, Type::Existential(beta), extended_gamma)?.drop_scope(),
+            ))
         }
         Term::Annotation(term, ty) => {
             println!("{:>20}", "Anno");
-            (*ty.clone(), check(*term, *ty, ctx))
+            Ok((*ty.clone(), check(*term, *ty, ctx)?))
         }
         Term::Application(e, e2) => {
             println!("{:>20}", "->E");
-            let (a, theta) = synth(*e, ctx);
-            synth_function(&apply_context(&theta, a), *e2, theta)
+            let (a, theta) = synth(*e, ctx)?;
+            Ok(synth_function(&apply_context(&theta, a), *e2, theta)?)
+        }
+        Term::Functor(name, term) => {
+            let (ty, ctx) = synth(*term, ctx)?;
+            Ok((Type::HigherKinded(vec![ty]), ctx))
+        }
+        Term::Let(name, term, term1) => {
+            if ctx.any_matches(
+                |elem| matches!(elem, ContextElement::TypedVariable(name1, _) if *name1 == name),
+            ) {
+                panic!("Initialized variable twice");
+            };
+            let (a, theta) = synth(*term, ctx)?;
+            let delta = synth(*term1, theta.extend(ContextElement::TypedVariable(name, a)));
+            return delta;
         }
     }
 }
-fn synth_function(a: &Type, e: Term, mut ctx: Context) -> (Type, Context) {
+fn synth_function(
+    a: &Type,
+    e: Term,
+    mut ctx: Context,
+) -> Result<(Type, Context), (CheckingError, Context)> {
     println!("synthesizing type if {a} is applied to {e} under Context {ctx}");
     match a {
         Type::Existential(alpha_hat) => {
@@ -311,10 +352,10 @@ fn synth_function(a: &Type, e: Term, mut ctx: Context) -> (Type, Context) {
                         ),
                     )),
                 ]);
-            (
+            Ok((
                 Type::Existential(alpha_hat2),
-                check(e, Type::Existential(alpha_hat1), ctx),
-            )
+                check(e, Type::Existential(alpha_hat1), ctx)?,
+            ))
         }
         Type::Quantification(alpha, ty) => {
             println!("{:>20}", "∀App");
@@ -328,7 +369,7 @@ fn synth_function(a: &Type, e: Term, mut ctx: Context) -> (Type, Context) {
         }
         Type::Function(a, c) => {
             println!("{:>20}", "->App");
-            (*a.clone(), check(e, *a.clone(), ctx))
+            Ok((*a.clone(), check(e, *a.clone(), ctx)?))
         }
         _ => panic!(),
     }
@@ -338,7 +379,7 @@ fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Context {
     println!("have {ty} be a subtype of {ty2} under Context {ctx}");
     match (ty, ty2) {
         (Type::Unit, Type::Unit) => ctx.clone(),
-        (Type::Constructor(name), Type::Constructor(name2)) if name == name2 => ctx.clone(),
+        (Type::BaseType(name), Type::BaseType(name2)) if name == name2 => ctx.clone(),
         (Type::Variable(alpha1), Type::Variable(alpha2)) => {
             if ctx.is_well_formed(ty) {
                 if alpha1 == alpha2 {
@@ -367,6 +408,16 @@ fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Context {
                 theta,
             );
             return delta;
+        }
+        (Type::HigherKinded(v1), Type::HigherKinded(v2)) => {
+            if v1.len() != v2.len() {
+                panic!("Cannot subtype two higher kinded types with different arity")
+            }
+            let mut ctx = ctx;
+            for i in 0..v1.len() {
+                ctx = subtype(&v1[i], &v2[i], ctx);
+            }
+            ctx
         }
         // If a function returns a type variable, then it is ceartainly polymorphic
         (a, Type::Quantification(name, b)) => {
@@ -397,26 +448,23 @@ fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Context {
             ctx.instantiate(alpha_hat.to_string(), ty, Direction::Right)
         }
         (a, b) => panic!("Cannnot subtype {a} with {b}"),
-        (Type::Unit, _) => todo!(),
-        (Type::Constructor(_), _) => todo!(),
-        (Type::Variable(_), _) => todo!(),
-        (Type::Function(_, _), _) => todo!(),
     }
 }
 
 /// FV(A)
 fn occurs_check(alpha_hat: &String, ty: &Type) -> bool {
     match ty {
-        Type::Unit | Type::Constructor(_) => false,
+        Type::Unit | Type::BaseType(_) => false,
         Type::Variable(a) | Type::Existential(a) => a == alpha_hat,
         Type::Quantification(a, ty) => a == alpha_hat || occurs_check(alpha_hat, ty),
         Type::Function(a, b) => occurs_check(alpha_hat, a) || occurs_check(alpha_hat, b),
+        Type::HigherKinded(vec) => vec.iter().all(|ty| occurs_check(alpha_hat, ty)),
     }
 }
 fn substitute_existential(alpha_hat: &String, alpha: &Type, ty: &Type) -> Type {
     match ty {
         Type::Unit => Type::Unit,
-        Type::Constructor(_) => ty.clone(),
+        Type::BaseType(_) => ty.clone(),
         Type::Variable(var) => {
             if var == alpha_hat {
                 alpha.clone()
@@ -445,12 +493,13 @@ fn substitute_existential(alpha_hat: &String, alpha: &Type, ty: &Type) -> Type {
             Box::new(substitute_existential(alpha_hat, alpha, a)),
             Box::new(substitute_existential(alpha_hat, alpha, b)),
         ),
+        Type::HigherKinded(vec) => todo!(),
     }
 }
 fn apply_context(ctx: &Context, ty: Type) -> Type {
     match ty {
         /// [Γ]1 = 1
-        unit @ (Type::Unit | Type::Constructor(_)) => unit,
+        unit @ (Type::Unit | Type::BaseType(_)) => unit,
         /// [Γ]α = α
         alpha @ Type::Variable(_) => alpha,
         /// [Γ](∀α. A) = ∀α. [Γ]A
@@ -467,19 +516,27 @@ fn apply_context(ctx: &Context, ty: Type) -> Type {
         Type::Existential(ref alpha_hat) => ctx
             .get_solved(alpha_hat)
             .map_or(ty, |tau| apply_context(ctx, tau.clone())),
+        Type::HigherKinded(vec) => Type::HigherKinded(
+            vec.iter()
+                .map(|ty| apply_context(ctx, ty.clone()))
+                .collect(),
+        ),
+        Type::Unit => todo!(),
+        Type::BaseType(_) => todo!(),
     }
 }
 
 fn main() {}
 #[test]
-fn basic() {
+fn basic() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (ty, ctx) = synth(Term::Unit, ctx);
+    let (ty, ctx) = synth(Term::Unit, ctx).map_err(|a| a.0)?;
     assert_eq!(apply_context(&ctx, ty), Type::Unit);
+    Ok(())
 }
 
 #[test]
-fn application() {
+fn application() -> Result<(), CheckingError> {
     let ctx = Context::new();
     let (ty, omega) = synth(
         Term::Application(
@@ -487,17 +544,20 @@ fn application() {
             Box::new(Term::Unit),
         ),
         ctx,
-    );
+    )
+    .map_err(|a| a.0)?;
     assert_eq!(Type::Unit, apply_context(&omega, ty));
+    Ok(())
 }
 
 #[test]
-fn lambda() {
+fn lambda() -> Result<(), CheckingError> {
     let ctx = Context::new();
     let (ty, omega) = synth(
         Term::Abstraction("x".into(), Term::Variable("x".into()).into()),
         ctx,
-    );
+    )
+    .map_err(|a| a.0)?;
     assert_eq!(
         apply_context(&omega, ty),
         Type::Function(
@@ -505,13 +565,16 @@ fn lambda() {
             Type::Existential("t0".into()).into()
         )
     );
+    Ok(())
 }
 
 #[test]
-fn idunit() {
+fn idunit() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (ty, omega) = synth(Term::Application(id_fn().into(), Term::Unit.into()), ctx);
-    assert_eq!(Type::Unit, apply_context(&omega, ty))
+    let (ty, omega) =
+        synth(Term::Application(id_fn().into(), Term::Unit.into()), ctx).map_err(|a| a.0)?;
+    assert_eq!(Type::Unit, apply_context(&omega, ty));
+    Ok(())
 }
 
 fn id_fn() -> Term {
@@ -526,4 +589,45 @@ fn id_fn() -> Term {
             .into(),
         )),
     )
+}
+#[test]
+fn nested_to_string() -> Result<(), CheckingError> {
+    let ctx = Context::new();
+    let app = Term::Application(
+        Term::Annotation(
+            Box::new(Term::Abstraction(
+                "x".into(),
+                Term::Functor("F".to_owned(), Term::LitBool(false).into()).into(),
+            )),
+            Type::Function(
+                Type::HigherKinded(vec![Type::BaseType("int".into())]).into(),
+                Type::HigherKinded(vec![Type::BaseType("bool".into())]).into(),
+            )
+            .into(),
+        )
+        .into(),
+        Term::Functor("Option".into(), Term::LitInt(23).into()).into(),
+    );
+    println!("{app}");
+    let (ty, omega) = synth(app, ctx).map_err(|a| a.0)?;
+    assert_eq!(
+        Type::HigherKinded(vec![Type::BaseType("int".into())]),
+        apply_context(&omega, ty)
+    );
+    Ok(())
+}
+#[test]
+fn let_with_fun() -> Result<(), CheckingError> {
+    let ctx = Context::new();
+    let (ty, omega) = synth(
+        Term::Let(
+            "id".to_owned(),
+            id_fn().into(),
+            Term::Application(Term::Variable("id".to_owned()).into(), Term::Unit.into()).into(),
+        ),
+        ctx,
+    )
+    .map_err(|a| a.0)?;
+    assert_eq!(Type::Unit, apply_context(&omega, ty));
+    Ok(())
 }
