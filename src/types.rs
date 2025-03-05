@@ -54,6 +54,11 @@ struct Existential(usize);
 pub(crate) enum CheckingError {
     UnannotatedVariable(String),
     DoubelyInitializedVariable(String),
+    // Expected, found
+    TypeMissmatch(Type, Type),
+    InvalidInstantiation(Type, String),
+    NotWellFormed(Type),
+    KindMissmatch(Type, Type),
 }
 impl fmt::Display for Context {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {

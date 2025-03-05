@@ -116,47 +116,38 @@ impl Context {
     }
 
     /// instantiate ^α to a subtype of A
-    fn instantiate(mut self, alpha_hat: String, ty: &Type, dir: Direction) -> Context {
+    fn instantiate(
+        mut self,
+        alpha_hat: String,
+        ty: &Type,
+        dir: Direction,
+    ) -> Result<Context, (CheckingError, Context)> {
         println!("instantiate {alpha_hat} to a subtype of {ty} under Context {self}");
         let mut alpha = ContextElement::Existential(alpha_hat.clone());
         assert!(!occurs_check(&alpha_hat, ty));
-        let (begin, rest) = self.elements.split_at(
-            self.elements
-                .iter()
-                .position(|elem| elem == &alpha)
-                .unwrap_or_else(|| panic!("Could not find {} in context to split", alpha)),
-        );
-        let (l, r) = (
-            Context {
-                elements: begin.to_vec(),
-                ..self.clone()
-            },
-            Context {
-                elements: rest.to_vec(),
-                ..self.clone()
-            },
-        );
-
-        if ty.is_monotype() && l.is_well_formed(ty) {
+        let (begin, rest) = &self.clone().split_at(&alpha);
+        if ty.is_monotype() && begin.is_well_formed(ty) {
             println!("{:>20}", "InstLSolve");
-            return self.insert_at(&alpha, vec![ContextElement::Solved(alpha_hat, ty.clone())]);
+            return Ok(self.insert_at(&alpha, vec![ContextElement::Solved(alpha_hat, ty.clone())]));
         }
         match (ty, dir) {
             (Type::Existential(beta), _) => {
                 println!("{:>20}", "InstLReach");
-                assert!(r.is_well_formed(ty));
-                self.insert_at(&ContextElement::Existential(beta.to_string()), vec![
-                    ContextElement::Solved(beta.to_string(), (Type::Existential(alpha_hat))),
-                ])
+                assert!(rest.is_well_formed(ty));
+                Ok(
+                    self.insert_at(&ContextElement::Existential(beta.to_string()), vec![
+                        ContextElement::Solved(beta.to_string(), (Type::Existential(alpha_hat))),
+                    ]),
+                )
             }
             (Type::Quantification(beta, ty), Direction::Left) => {
                 println!("{:>20}", "InstLAllR");
                 let beta_hat = self.fresh_existential();
                 let mut extended_gamma = self.extend(ContextElement::Existential(beta_hat));
                 let delta = extended_gamma
-                    .instantiate(alpha_hat, ty, Direction::Left)
+                    .instantiate(alpha_hat, ty, Direction::Left)?
                     .drop(ContextElement::Existential(beta.to_string()));
-                return delta;
+                return Ok(delta);
             }
             (Type::Quantification(beta, ty), Direction::Right) => {
                 println!("{:>20}", "InstRAllL");
@@ -169,9 +160,9 @@ impl Context {
                         alpha_hat,
                         &substitute_existential(&beta_hat, &Type::Variable(beta.to_string()), ty),
                         Direction::Right,
-                    )
+                    )?
                     .drop_scope();
-                return delta;
+                return Ok(delta);
             }
             (Type::Function(a, b), dir) => {
                 println!("{:>20}", "InstArr");
@@ -188,15 +179,36 @@ impl Context {
                         ),
                     ),
                 ]);
-                let mut theta = extended_gamma.instantiate(alpha_hat1, a, dir.flip());
+                let mut theta = extended_gamma.instantiate(alpha_hat1, a, dir.flip())?;
                 let b = apply_context(&theta, *b.clone());
                 let delta = theta.instantiate(alpha_hat2, &b, dir);
                 return delta;
             }
-            (t, dir) => panic!(
-                "Failed to handle {t} in direction {dir:?}, either is_well_formed has a problem or i need to handle more cases"
-            ),
+            (t, dir) => Err((
+                CheckingError::InvalidInstantiation(t.clone(), alpha_hat),
+                self,
+            )),
         }
+    }
+
+    fn split_at(mut self, alpha: &ContextElement) -> (Context, Context) {
+        let (begin, rest) = self.elements.split_at(
+            self.elements
+                .iter()
+                .position(|elem| elem == alpha)
+                .unwrap_or_else(|| panic!("Could not find {} in context to split", alpha)),
+        );
+        let (l, r) = (
+            Context {
+                elements: begin.to_vec(),
+                ..self.clone()
+            },
+            Context {
+                elements: rest.to_vec(),
+                ..self.clone()
+            },
+        );
+        (l, r)
     }
     /// Γ == ∆, ^α
     fn has_existential(&self, alpha_hat: &str) -> bool {
@@ -246,7 +258,7 @@ fn check(e: Term, ty: Type, ctx: Context) -> Result<Context, (CheckingError, Con
             if ctx.any_matches(
                 |elem| matches!(elem, ContextElement::TypedVariable(name1, _) if *name1 == name),
             ) {
-                panic!("Initialized variable twice");
+                return Err((CheckingError::DoubelyInitializedVariable(name), ctx));
             }
             let (a, theta) = synth(*expr, ctx)?;
             let delta = check(
@@ -259,11 +271,7 @@ fn check(e: Term, ty: Type, ctx: Context) -> Result<Context, (CheckingError, Con
         (e, ty) => {
             println!("{:>20}", "Sub");
             let (a, theta) = synth(e, ctx)?;
-            Ok(subtype(
-                &apply_context(&theta, a),
-                &apply_context(&theta, ty),
-                theta,
-            ))
+            subtype(&apply_context(&theta, a), &apply_context(&theta, ty), theta)
         }
     }
 }
@@ -321,7 +329,7 @@ fn synth(e: Term, mut ctx: Context) -> Result<(Type, Context), (CheckingError, C
             if ctx.any_matches(
                 |elem| matches!(elem, ContextElement::TypedVariable(name1, _) if *name1 == name),
             ) {
-                panic!("Initialized variable twice");
+                return Err((CheckingError::DoubelyInitializedVariable(name), ctx));
             };
             let (a, theta) = synth(*term, ctx)?;
             let delta = synth(*term1, theta.extend(ContextElement::TypedVariable(name, a)));
@@ -375,33 +383,33 @@ fn synth_function(
     }
 }
 /// Under input context ctx, type A is a subtype of B
-fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Context {
+fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Result<Context, (CheckingError, Context)> {
     println!("have {ty} be a subtype of {ty2} under Context {ctx}");
     match (ty, ty2) {
-        (Type::Unit, Type::Unit) => ctx.clone(),
-        (Type::BaseType(name), Type::BaseType(name2)) if name == name2 => ctx.clone(),
+        (Type::Unit, Type::Unit) => Ok(ctx.clone()),
+        (Type::BaseType(name), Type::BaseType(name2)) if name == name2 => Ok(ctx.clone()),
         (Type::Variable(alpha1), Type::Variable(alpha2)) => {
             if ctx.is_well_formed(ty) {
                 if alpha1 == alpha2 {
-                    ctx.clone()
+                    Ok(ctx.clone())
                 } else {
-                    panic!("Variables don't match in subtyping")
+                    Err((CheckingError::TypeMissmatch(ty.clone(), ty2.clone()), ctx))
                 }
             } else {
-                panic!("{alpha2} is not well formed")
+                Err((CheckingError::NotWellFormed(ty2.clone()), ctx))
             }
         }
         (Type::Existential(alpha_hat), Type::Existential(alpha_hat2))
             if alpha_hat == alpha_hat2 =>
         {
             if ctx.is_well_formed(ty) {
-                ctx.clone()
+                Ok(ctx.clone())
             } else {
-                panic!("{alpha_hat2} is not well formed")
+                Err((CheckingError::NotWellFormed(ty2.clone()), ctx))
             }
         }
         (Type::Function(arg_a1, arg_a2), Type::Function(arg_b1, arg_b2)) => {
-            let theta = subtype(arg_a1, arg_b1, ctx);
+            let theta = subtype(arg_a1, arg_b1, ctx)?;
             let delta = subtype(
                 &apply_context(&theta, *arg_a1.clone()),
                 &apply_context(&theta, *arg_b2.clone()),
@@ -411,21 +419,21 @@ fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Context {
         }
         (Type::HigherKinded(v1), Type::HigherKinded(v2)) => {
             if v1.len() != v2.len() {
-                panic!("Cannot subtype two higher kinded types with different arity")
+                return Err((CheckingError::KindMissmatch(ty.clone(), ty2.clone()), ctx));
             }
             let mut ctx = ctx;
             for i in 0..v1.len() {
-                ctx = subtype(&v1[i], &v2[i], ctx);
+                ctx = subtype(&v1[i], &v2[i], ctx)?;
             }
-            ctx
+            Ok(ctx)
         }
         // If a function returns a type variable, then it is ceartainly polymorphic
         (a, Type::Quantification(name, b)) => {
             let extendet_gamma = ctx
                 .mark_scope()
                 .extend(ContextElement::Variable(name.to_string()));
-            let delta = subtype(a, b, extendet_gamma).drop_scope();
-            return delta;
+            let delta = subtype(a, b, extendet_gamma)?.drop_scope();
+            return Ok(delta);
         }
         // If a function takes a type variable, then it might be restricted by it's callers
         (Type::Quantification(name, b), a) => {
@@ -437,9 +445,9 @@ fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Context {
                 &substitute_existential(name, &Type::Variable(alpha_hat), a),
                 b,
                 extendet_gamma,
-            )
+            )?
             .drop_scope();
-            return delta;
+            return Ok(delta);
         }
         (Type::Existential(alpha_hat), ty) => {
             ctx.instantiate(alpha_hat.to_string(), ty, Direction::Left)
@@ -447,7 +455,7 @@ fn subtype(ty: &Type, ty2: &Type, mut ctx: Context) -> Context {
         (ty, Type::Existential(alpha_hat)) => {
             ctx.instantiate(alpha_hat.to_string(), ty, Direction::Right)
         }
-        (a, b) => panic!("Cannnot subtype {a} with {b}"),
+        (a, b) => Err((CheckingError::TypeMissmatch(a.clone(), b.clone()), ctx)),
     }
 }
 
