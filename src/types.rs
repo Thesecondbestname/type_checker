@@ -6,10 +6,10 @@ pub(crate) enum Term {
     Abstraction(String, Box<Term>),
     Application(Box<Term>, Box<Term>),
     Annotation(Box<Term>, Box<Type>),
-    LitInt(usize),
-    LitBool(bool),
     Functor(String, Box<Term>),
     Let(String, Box<Term>, Box<Term>),
+    LitInt(usize),
+    LitBool(bool),
 }
 /// 1 | α | ^α | ∀α. A | A → B
 #[derive(PartialEq, Debug, Clone, Eq)]
@@ -22,12 +22,12 @@ pub(crate) enum Type {
     Existential(String),
     /// ∀α. A
     Quantification(String, Box<Type>),
-    /// A → B
+    /// A →  B
     Function(Box<Type>, Box<Type>),
     /// Named Type
     BaseType(String),
-    /// F[_]
-    HigherKinded(Vec<Type>),
+    /// Option[T, ..], F[_]
+    HigherKinded(Option<String>, Vec<Option<Type>>, bool),
 }
 /// Θ ::= · | Γ, α | Γ, x : A | Γ, ^α | Γ, ^α = τ | Γ, I^
 #[derive(PartialEq, Debug, Clone, Eq)]
@@ -47,6 +47,7 @@ pub(crate) struct Context {
     pub elements: Vec<ContextElement>,
     pub existentials: usize,
     pub markers: Vec<usize>,
+    pub ident_level: usize,
 }
 
 struct Existential(usize);
@@ -94,7 +95,7 @@ impl fmt::Display for Term {
             Term::Annotation(e, a) => write!(f, "({}: {})", e, a),
             Term::LitBool(b) => write!(f, "{b}"),
             Term::LitInt(i) => write!(f, "{i}"),
-            Term::Functor(name, term) => write!(f, "{name}{{{term}}}"),
+            Term::Functor(name, term) => write!(f, "{name}::new({term})"),
             Term::Let(name, term, term1) => write!(f, "let {name} = {term} in {term1}"),
         }
     }
@@ -108,14 +109,16 @@ impl fmt::Display for Type {
             Self::Quantification(a, ty) => write!(f, "(∀{a}. {ty})"),
             Self::Function(a, c) => write!(f, "({a} -> {c})"),
             Type::BaseType(name) => write!(f, "{name}"),
-            Self::HigherKinded(generics) => write!(
+            Self::HigherKinded(name, generics, open) => write!(
                 f,
-                "F[{}]",
+                "{}[{}, {}]",
+                name.as_ref().map_or("F", |v| v),
                 generics
                     .iter()
-                    .map(|a| a.to_string())
-                    .reduce(|acc, e| acc + &e)
-                    .unwrap_or_default()
+                    .map(|a| a.clone().map_or("_".to_string(), |a| a.to_string()))
+                    .reduce(|acc, e| acc + "," + &e)
+                    .unwrap_or("_".to_string()),
+                open.then_some("..").unwrap_or_default()
             ),
         }
     }
@@ -129,3 +132,12 @@ impl Type {
         }
     }
 }
+/*
+trait[T, F[T]] Monad {
+  lift# (T -> F[T]); // Lift a value into the monad
+  flat_map#((F[T], fn(T) -> F[U]) -> F[U]);
+}
+impl Monad[F[T]] for F[T] {
+    lift(t) =
+}
+*/
