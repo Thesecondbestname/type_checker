@@ -1,17 +1,23 @@
-use core::fmt;
-use std::fmt::Write;
-pub(crate) enum Term {
-    Variable(String),
+use core::{fmt, panic};
+use std::{
+    fmt::Write,
+    mem::{self, transmute},
+};
+
+pub(crate) enum Ast<Var> {
+    Variable(Var),
     Unit,
-    Abstraction(String, Box<Term>),
-    Application(Box<Term>, Box<Term>),
-    Annotation(Box<Term>, Box<Type>),
-    Functor(String, Box<Term>),
-    Let(String, Box<Term>, Box<Term>),
+    Abstraction(Var, Box<Self>),
+    Application(Box<Self>, Box<Self>),
+    Annotation(Box<Self>, Box<Type>),
+    Functor(String, Box<Self>),
+    Let(Var, Box<Self>, Box<Self>),
+    Tuple(Vec<Self>),
     LitInt(usize),
     LitBool(bool),
 }
-/// 1 | α | ^α | ∀α. A | A → B
+pub struct TypedVar(pub String, pub Type);
+/// 1 | α | ^α | ∀α. A | A →  B | (A, B) | (A | B) | F[α]
 #[derive(PartialEq, Debug, Clone, Eq)]
 pub(crate) enum Type {
     /// 1
@@ -24,6 +30,10 @@ pub(crate) enum Type {
     Quantification(String, Box<Type>),
     /// A →  B
     Function(Box<Type>, Box<Type>),
+    /// Tuple (A,B,C)
+    Product(Vec<Type>),
+    /// Enum Tuple (A + B + C)
+    Sum(Vec<Type>),
     /// Named Type
     BaseType(String),
     /// Option[T, ..], F[_]
@@ -57,8 +67,10 @@ pub(crate) enum CheckingError {
     DoubelyInitializedVariable(String),
     // Expected, found
     TypeMissmatch(Type, Type),
+    AllOptionsFailed(Vec<CheckingError>),
     InvalidInstantiation(Type, String),
     NotWellFormed(Type),
+    MissmatchedArity(Type, Type),
     KindMissmatch(Type, Type),
 }
 impl fmt::Display for Context {
@@ -85,31 +97,44 @@ impl fmt::Display for ContextElement {
     }
 }
 
-impl fmt::Display for Term {
+impl<T: std::fmt::Display> fmt::Display for Ast<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Term::Unit => write!(f, "()"),
-            Term::Variable(var) => write!(f, "{}", var),
-            Term::Abstraction(alpha, e) => write!(f, "(\\{} -> {})", alpha, e),
-            Term::Application(e1, e2) => write!(f, "{} {}", e1, e2),
-            Term::Annotation(e, a) => write!(f, "({}: {})", e, a),
-            Term::LitBool(b) => write!(f, "{b}"),
-            Term::LitInt(i) => write!(f, "{i}"),
-            Term::Functor(name, term) => write!(f, "{name}::new({term})"),
-            Term::Let(name, term, term1) => write!(f, "let {name} = {term} in {term1}"),
+            Ast::Unit => write!(f, "()"),
+            Ast::Variable(var) => write!(f, "{}", var),
+            Ast::Abstraction(alpha, e) => write!(f, "(\\{} -> {})", alpha, e),
+            Ast::Application(e1, e2) => write!(f, "{} {}", e1, e2),
+            Ast::Annotation(e, a) => write!(f, "({}: {})", e, a),
+            Ast::LitBool(b) => write!(f, "{b}"),
+            Ast::LitInt(i) => write!(f, "{i}"),
+            Ast::Functor(name, term) => write!(f, "{name}::new({term})"),
+            Ast::Let(name, term, term1) => write!(f, "let {name} = {term} in {term1}"),
+            Ast::Tuple(vec) => write!(
+                f,
+                "({})",
+                vec.iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
         }
+    }
+}
+impl fmt::Display for TypedVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "({}: {})", self.0, self.1)
     }
 }
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
-            Self::Unit => write!(f, "()"),
-            Self::Variable(var) => write!(f, "{var}"),
-            Self::Existential(ex) => write!(f, "'{ex}"),
-            Self::Quantification(a, ty) => write!(f, "(∀{a}. {ty})"),
-            Self::Function(a, c) => write!(f, "({a} -> {c})"),
+            Type::Unit => write!(f, "()"),
+            Type::Variable(var) => write!(f, "{var}"),
+            Type::Existential(ex) => write!(f, "'{ex}"),
+            Type::Quantification(a, ty) => write!(f, "(∀{a}. {ty})"),
+            Type::Function(a, c) => write!(f, "({a} -> {c})"),
             Type::BaseType(name) => write!(f, "{name}"),
-            Self::HigherKinded(name, generics, open) => write!(
+            Type::HigherKinded(name, generics, open) => write!(
                 f,
                 "{}[{}, {}]",
                 name.as_ref().map_or("F", |v| v),
@@ -120,7 +145,49 @@ impl fmt::Display for Type {
                     .unwrap_or("_".to_string()),
                 open.then_some("..").unwrap_or_default()
             ),
+            Type::Product(vec) => {
+                write!(
+                    f,
+                    "({})",
+                    vec.iter().map(|a| a.to_string() + ",").collect::<String>()
+                )
+            }
+            Type::Sum(vec) => write!(
+                f,
+                "({})",
+                vec.iter().map(|a| a.to_string() + "|").collect::<String>()
+            ),
         }
+    }
+}
+impl ContextElement {
+    pub fn to_type(self) -> TypedVar {
+        match self {
+            ContextElement::TypedVariable(name, ty) => TypedVar(name, ty),
+            ContextElement::Solved(name, ty) => TypedVar(name, ty),
+            _ => panic!("Context Element not solved!"),
+        }
+    }
+}
+impl Ast<String> {
+    pub fn typed(self) -> Ast<TypedVar> {
+        match self {
+            Ast::LitBool(b) => Ast::LitBool(b),
+            Ast::LitInt(i) => Ast::LitInt(i),
+            Ast::Unit => Ast::Unit,
+            _ => panic!("Don't do that..."),
+        }
+    }
+}
+impl Context {
+    pub fn is_complete(&self) -> bool {
+        println!("{:?}", self.elements);
+        self.elements.iter().all(|elem| match elem {
+            ContextElement::Variable(alpha) => false,
+            ContextElement::TypedVariable(var, ty) => self.is_well_formed(&ty),
+            ContextElement::Existential(alpha_hat) => false,
+            ContextElement::Solved(var, ty) => self.is_well_formed(&ty),
+        })
     }
 }
 impl Type {
@@ -132,12 +199,3 @@ impl Type {
         }
     }
 }
-/*
-trait[T, F[T]] Monad {
-  lift# (T -> F[T]); // Lift a value into the monad
-  flat_map#((F[T], fn(T) -> F[U]) -> F[U]);
-}
-impl Monad[F[T]] for F[T] {
-    lift(t) =
-}
-*/

@@ -1,14 +1,16 @@
 #![allow(unused)]
 #![allow(clippy::uninlined_format_args)]
+mod lower;
 mod types;
 
 use core::panic;
 use std::mem;
+use types::Ast;
 use types::CheckingError;
 use types::Context;
 use types::ContextElement;
-use types::Term;
 use types::Type;
+use types::TypedVar;
 
 impl Context {
     const fn new() -> Self {
@@ -48,6 +50,8 @@ impl Context {
             Type::HigherKinded(_, generics, open) => generics
                 .iter()
                 .all(|ty| ty.as_ref().is_none_or(|ty| self.is_well_formed(ty))),
+            Type::Product(vec) => vec.iter().all(|a| self.is_well_formed(a)),
+            Type::Sum(vec) => vec.iter().all(|a| self.is_well_formed(a)),
         }
     }
     fn contains(&self, c: ContextElement) -> bool {
@@ -104,7 +108,10 @@ impl Context {
     }
     /// Γ -> Γ [^α = τ]
     fn get_solved(&self, alpha_hat: &str) -> Option<&Type> {
-        println!("looking for {alpha_hat} in {self}");
+        println!(
+            "{} looking for {alpha_hat} in {self}",
+            "-".repeat(self.ident_level)
+        );
         for elem in &self.elements {
             if let ContextElement::Solved(a, b) = elem {
                 if alpha_hat == a {
@@ -127,7 +134,7 @@ impl Context {
     }
 
     /// instantiate ^α to a subtype of A
-    fn instantiate<'a>(
+    fn instantiate(
         mut self,
         alpha_hat: String,
         ty: Type,
@@ -250,148 +257,190 @@ impl Direction {
     }
 }
 
-fn check(e: Term, ty: &Type, ctx: Context) -> Result<(Context), (CheckingError, Context)> {
+fn check(
+    e: Ast<String>,
+    ty: &Type,
+    ctx: Context,
+) -> Result<(Ast<TypedVar>, Context), (CheckingError, Context)> {
     let mut ctx = ctx;
     println!(
         "{} checking that {e} has type {ty} under context {ctx}",
         "-".repeat(ctx.indent())
     );
     let mut t = match (e, ty) {
-        (Term::Unit, ty @ Type::Unit) => {
+        (Ast::Unit, ty @ Type::Unit) => {
             println!("{:>20}", "1I");
-            Ok(ctx)
+            Ok((Ast::Unit, ctx))
         }
         (e, Type::Quantification(name, ty)) => {
             println!("{:>20}", "∀I");
             let mut extendet_gamma = ctx
                 .mark_scope()
                 .extend(ContextElement::Variable(name.to_string()));
-            let delta = check(e, ty, extendet_gamma)?.drop_scope();
-            return Ok(delta);
+            let (ast_prime, delta) = check(e, ty, extendet_gamma)?;
+            return Ok((ast_prime, delta.drop_scope()));
         }
-        (Term::Abstraction(x, term), Type::Function(a, b)) => {
+        (Ast::Abstraction(x, term), Type::Function(a, b)) => {
             println!("{:>20}", "->I");
-            let typed = ContextElement::TypedVariable(x, *a.clone());
+            let typed = ContextElement::TypedVariable(x.clone(), *a.clone());
             let extended_gamma = ctx.mark_scope().extend(typed);
-            let delta = check(*term, &*b, extended_gamma)?.drop_scope();
-            return Ok(delta);
+            let (ast_prime, delta) = check(*term, &*b, extended_gamma)?;
+            return Ok((
+                Ast::Abstraction(TypedVar(x, *a.clone()), Box::new(ast_prime)),
+                delta.drop_scope(),
+            ));
         }
-        (Term::Let(name, expr, tail), ty) => {
+        (Ast::Let(name, expr, tail), ty) => {
             println!("{:>20}", "Let");
             if ctx.any_matches(
                 |elem| matches!(elem, ContextElement::TypedVariable(name1, _) if *name1 == name),
             ) {
                 return Err((CheckingError::DoubelyInitializedVariable(name), ctx));
             }
-            let (a, theta) = synth(*expr, ctx)?;
-            let delta = check(
+            let (typed_expr, a, theta) = synth(*expr, ctx)?;
+            let (typed_tail, delta) = check(
                 *tail,
                 ty,
-                theta.extend(ContextElement::TypedVariable(name, a)),
-            );
-            return delta;
+                theta.extend(ContextElement::TypedVariable(name.clone(), a.clone())),
+            )?;
+            return Ok((
+                Ast::Let(TypedVar(name, a), typed_expr.into(), typed_tail.into()),
+                delta,
+            ));
         }
         (e, ty) => {
             println!("{:>20}", "Sub");
-            let (a, theta) = synth(e, ctx)?;
+            let (typed_e, a, theta) = synth(e, ctx)?;
             subtype(
                 apply_context(&theta, a.clone()),
                 apply_context(&theta, ty.clone()),
                 theta,
             )
+            .map(|a| (typed_e, a))
         }
     };
     t.map(|mut a| {
-        println!("{} checked context {}", "-".repeat(a.unindent() + 1), a,);
+        println!("{} checked context {}", "-".repeat(a.1.unindent() + 1), a.1);
         a
     })
 }
-fn synth<'a>(e: Term, mut ctx: Context) -> Result<(Type, Context), (CheckingError, Context)> {
+fn synth<'a>(
+    e: Ast<String>,
+    mut ctx: Context,
+) -> Result<(Ast<TypedVar>, Type, Context), (CheckingError, Context)> {
     let indent = ctx.indent();
     println!(
         "{} synthesizing Type for {e} under context {ctx}",
         "-".repeat(indent)
     );
     let mut t = match e {
-        Term::Variable(name) => {
+        Ast::Variable(name) => {
             println!("{:>20}", "Var");
             let annot = ctx.get_annotation(&name);
             if let Some(ty) = annot {
-                Ok((ty.clone(), ctx))
+                Ok((Ast::Variable(TypedVar(name, ty.clone())), ty.clone(), ctx))
             } else {
                 Err((CheckingError::UnannotatedVariable(name), ctx))
             }
         }
-        Term::LitInt(_) => Ok((Type::BaseType("int".to_owned()), ctx)),
-        Term::LitBool(_) => Ok((Type::BaseType("bool".to_owned()), ctx)),
-        Term::Unit => {
+        i @ Ast::LitInt(_) => Ok((i.typed(), Type::BaseType("int".to_owned()), ctx)),
+        b @ Ast::LitBool(_) => Ok((b.typed(), Type::BaseType("bool".to_owned()), ctx)),
+        Ast::Unit => {
             println!("{:>20}", "1I=>");
-            Ok((Type::Unit, ctx))
+            Ok((Ast::Unit, Type::Unit, ctx))
         }
-        Term::Abstraction(x, e) => {
+        Ast::Abstraction(x, e) => {
             println!("{:>20}", "->I=>");
             let alpha_hat = ctx.fresh_existential();
             let beta_hat = ctx.fresh_existential();
-            let typed = ContextElement::TypedVariable(x, { Type::Existential(alpha_hat.clone()) });
+            let typed =
+                ContextElement::TypedVariable(x.clone(), { Type::Existential(alpha_hat.clone()) });
             let extended_gamma = ctx
                 .extend(ContextElement::Existential(alpha_hat.clone()))
                 .extend(ContextElement::Existential(beta_hat.clone()))
                 .mark_scope()
                 .extend(typed);
+            let (typed_e, delta) = check(*e, &Type::Existential(beta_hat.clone()), extended_gamma)?;
             Ok((
+                Ast::Abstraction(
+                    TypedVar(x, Type::Existential(alpha_hat.clone())),
+                    typed_e.into(),
+                ),
                 Type::Function(
                     Box::new(Type::Existential(alpha_hat)),
                     Box::new(Type::Existential(beta_hat.clone())),
                 ),
-                check(*e, &Type::Existential(beta_hat), extended_gamma)?,
+                delta,
             ))
         }
-        Term::Annotation(term, ty) => {
+        Ast::Annotation(term, ty) => {
             println!("{:>20}", "Anno");
-            let delta = check(*term, &ty, ctx)?;
-            Ok((*ty, delta))
+            let (typed_term, delta) = check(*term, &ty, ctx)?;
+            Ok((typed_term, *ty, delta))
         }
-        Term::Application(e1, e2) => {
+        Ast::Application(e1, e2) => {
             println!("{:>20}", "->E");
-            let (a, theta) = synth(*e1, ctx)?;
-            Ok(synth_function(apply_context(&theta, a), *e2, theta)?)
+            let (typed_e1, a, theta) = synth(*e1, ctx)?;
+            let (typed_e2, b, delta) = synth_function(apply_context(&theta, a), *e2, theta)?;
+            Ok((Ast::Application(typed_e1.into(), typed_e2.into()), b, delta))
         }
-        Term::Functor(name, term) => {
+        Ast::Functor(name, term) => {
             println!("{:>20}", "Cons");
-            let (ty, ctx) = synth(*term, ctx)?;
-            Ok((Type::HigherKinded(Some(name), vec![Some(ty)], false), ctx))
+            let (typed_term, ty, ctx) = synth(*term, ctx)?;
+            Ok((
+                Ast::Functor(name.clone(), typed_term.into()),
+                Type::HigherKinded(Some(name), vec![Some(ty)], false),
+                ctx,
+            ))
         }
-        Term::Let(name, term, term1) => {
+        Ast::Let(name, term, term1) => {
             println!("{:>20}", "=>Let");
             if ctx.any_matches(
                 |elem| matches!(elem, ContextElement::TypedVariable(name1, _) if *name1 == name),
             ) {
                 return Err((CheckingError::DoubelyInitializedVariable(name), ctx));
             };
-            let (a, theta) = synth(*term, ctx)?;
-            let delta = synth(*term1, theta.extend(ContextElement::TypedVariable(name, a)));
-            delta
+            let (typed_term, a, theta) = synth(*term, ctx)?;
+            let (typed_term1, b, delta) = synth(
+                *term1,
+                theta.extend(ContextElement::TypedVariable(name.clone(), a.clone())),
+            )?;
+            Ok((
+                Ast::Let(TypedVar(name, a), typed_term.into(), typed_term1.into()).into(),
+                b,
+                delta,
+            ))
+        }
+        Ast::Tuple(vec) => {
+            let mut ctx = ctx;
+            let mut tys = Vec::with_capacity(vec.len());
+            let mut typed_es = Vec::with_capacity(vec.len());
+            for e in vec {
+                let (e_typed, ty, ctx_hat) = synth(e, ctx)?;
+                ctx = ctx_hat;
+                typed_es.push(e_typed);
+                tys.push(ty);
+            }
+            Ok((Ast::Tuple(typed_es), Type::Product(tys), ctx))
         }
     };
     let mut indent = 0;
     t.as_mut().map(|mut a| {
-        indent = a.1.unindent();
+        indent = a.2.unindent();
         a
     });
     println!(
         "{} synthesized type {}",
         "-".repeat(indent),
-        t.as_ref()
-            .cloned()
-            .map_or("".to_string(), |a| a.0.to_string()),
+        t.as_ref().map_or("".to_string(), |a| a.0.to_string()),
     );
     t
 }
 fn synth_function(
     a: Type,
-    e: Term,
+    e: Ast<String>,
     mut ctx: Context,
-) -> Result<(Type, Context), (CheckingError, Context)> {
+) -> Result<(Ast<TypedVar>, Type, Context), (CheckingError, Context)> {
     println!("synthesizing type if {a} is applied to {e} under Context {ctx}");
     let t = match a {
         Type::Existential(alpha_hat) => {
@@ -410,10 +459,8 @@ fn synth_function(
                         ),
                     )),
                 ]);
-            Ok((
-                Type::Existential(alpha_hat2),
-                check(e, &Type::Existential(alpha_hat1), ctx)?,
-            ))
+            let (typed_e, delta) = check(e, &Type::Existential(alpha_hat1), ctx)?;
+            Ok((typed_e, Type::Existential(alpha_hat2), delta))
         }
         Type::Quantification(alpha, ty) => {
             println!("{:>20}", "∀App");
@@ -427,24 +474,19 @@ fn synth_function(
         }
         Type::Function(a, c) => {
             println!("{:>20}", "->App");
-            Ok((*c, check(e, &a, ctx)?))
+            let (typed_e, delta) = check(e, &a, ctx)?;
+            Ok((typed_e, *c, delta))
         }
         _ => panic!(),
     };
     println!(
-        "synthesized type {}",
-        t.as_ref()
-            .cloned()
-            .map_or("".to_string(), |a| a.0.to_string())
+        "synthesized type as {}",
+        t.as_ref().map_or("".to_string(), |a| a.0.to_string())
     );
     t
 }
-/// Under input context ctx, type A is a subtype of B
-fn subtype<'a>(
-    ty1: Type,
-    ty2: Type,
-    mut ctx: Context,
-) -> Result<Context, (CheckingError, Context)> {
+/// Under input context ctx, type `ty1` is a subtype of `ty2`
+fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingError, Context)> {
     println!(
         "{} have {ty1} be a subtype of {ty2} under Context {ctx}",
         "-".repeat(ctx.indent())
@@ -539,6 +581,32 @@ fn subtype<'a>(
             }
             Ok(ctx)
         }
+        (Type::Product(tup1), Type::Product(tup2)) if tup1.len() != tup2.len() => Err((
+            CheckingError::MissmatchedArity(Type::Product(tup1), Type::Product(tup2)),
+            ctx,
+        )),
+        (Type::Product(tup1), Type::Product(tup2)) => {
+            println!("{:>20}", "<:Prod");
+            let mut ctx = ctx;
+            for i in 0..(tup1.len().min(tup2.len())) {
+                ctx = subtype(tup1[i].clone(), tup2[i].clone(), ctx)?;
+            }
+            Ok(ctx)
+        }
+        (Type::Sum(tup), sum @ Type::Sum(_)) => {
+            let mut duped_gamma = ctx;
+            let mut errs = vec![];
+            for ty in tup {
+                match subtype(ty, sum.clone(), duped_gamma) {
+                    Ok(ctx) => return Ok(ctx),
+                    Err((e, ctx)) => {
+                        duped_gamma = ctx;
+                        errs.push(e);
+                    }
+                }
+            }
+            Err((CheckingError::AllOptionsFailed(errs), duped_gamma))
+        }
         // If a function returns a type variable, then it is ceartainly polymorphic
         (a, Type::Quantification(ref name, ref b)) => {
             println!("{:>20}", "<:∀R");
@@ -562,6 +630,26 @@ fn subtype<'a>(
             )?
             .drop_scope();
             return Ok(delta);
+        }
+        /*
+        ∀a. a -> (int | (String -> int) | a) = "hello"
+        */
+        (a, Type::Sum(tup)) => {
+            if tup.iter().any(|ty| *ty == a) {
+                return Ok(ctx);
+            }
+            let mut duped_gamma = ctx;
+            let mut errs = vec![];
+            for ty in tup {
+                match subtype(a.clone(), ty, duped_gamma) {
+                    Ok(ctx) => return Ok(ctx),
+                    Err((e, ctx)) => {
+                        duped_gamma = ctx;
+                        errs.push(e);
+                    }
+                }
+            }
+            Err((CheckingError::AllOptionsFailed(errs), duped_gamma))
         }
         (Type::Existential(alpha_hat), ty) => {
             ctx.instantiate(alpha_hat.to_string(), ty, Direction::Left)
@@ -587,9 +675,12 @@ fn occurs_check(alpha_hat: &String, ty: &Type) -> bool {
         Type::Function(a, b) => occurs_check(alpha_hat, a) || occurs_check(alpha_hat, b),
         Type::HigherKinded(_, generics, open) => generics
             .iter()
-            .all(|ty| ty.clone().is_some_and(|ref ty| occurs_check(alpha_hat, ty))),
+            .any(|ty| ty.clone().is_some_and(|ref ty| occurs_check(alpha_hat, ty))),
+        Type::Product(vec) => vec.iter().any(|ty| occurs_check(alpha_hat, ty)),
+        Type::Sum(vec) => vec.iter().any(|ty| occurs_check(alpha_hat, ty)),
     }
 }
+/// substitutes all occurances of one existential `alpha_hat` with concrete type `alpha` in `ty`
 fn substitute_existential(alpha_hat: &String, alpha: &Type, ty: Type) -> Type {
     match ty {
         Type::Unit => Type::Unit,
@@ -635,6 +726,16 @@ fn substitute_existential(alpha_hat: &String, alpha: &Type, ty: Type) -> Type {
                 .collect(),
             open,
         ),
+        Type::Product(vec) => Type::Product(
+            vec.into_iter()
+                .map(|ty| substitute_existential(alpha_hat, alpha, ty))
+                .collect(),
+        ),
+        Type::Sum(vec) => Type::Sum(
+            vec.into_iter()
+                .map(|ty| substitute_existential(alpha_hat, alpha, ty))
+                .collect(),
+        ),
     }
 }
 fn apply_context(ctx: &Context, ty: Type) -> Type {
@@ -664,31 +765,36 @@ fn apply_context(ctx: &Context, ty: Type) -> Type {
                 .collect(),
             open,
         ),
-        Type::Unit => todo!(),
-        Type::BaseType(_) => todo!(),
+        Type::Product(vec) => {
+            Type::Product(vec.into_iter().map(|ty| apply_context(ctx, ty)).collect())
+        }
+        Type::Sum(vec) => Type::Sum(vec.into_iter().map(|ty| apply_context(ctx, ty)).collect()),
+        Type::Unit => Type::Unit,
+        this @ Type::BaseType(_) => this,
     }
 }
-
 fn main() {}
 #[test]
 fn basic() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (ty, ctx) = synth(Term::Unit, ctx).map_err(|a| a.0)?;
-    assert_eq!(apply_context(&ctx, ty), Type::Unit);
+    let (a, ty, omega) = synth(Ast::Unit, ctx).map_err(|a| a.0)?;
+    assert!(omega.is_complete());
+    assert_eq!(apply_context(&omega, ty), Type::Unit);
     Ok(())
 }
 
 #[test]
 fn application() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (ty, omega) = synth(
-        Term::Application(
-            Term::Abstraction("x".into(), Term::Variable("x".into()).into()).into(),
-            Box::new(Term::Unit),
+    let (a, ty, omega) = synth(
+        Ast::Application(
+            Ast::Abstraction("x".into(), Ast::Variable("x".into()).into()).into(),
+            Box::new(Ast::Unit),
         ),
         ctx,
     )
     .map_err(|a| a.0)?;
+    assert!(omega.is_complete());
     assert_eq!(Type::Unit, apply_context(&omega, ty));
     Ok(())
 }
@@ -696,8 +802,8 @@ fn application() -> Result<(), CheckingError> {
 #[test]
 fn lambda() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (ty, omega) = synth(
-        Term::Abstraction("x".into(), Term::Variable("x".into()).into()),
+    let (a, ty, omega) = synth(
+        Ast::Abstraction("x".into(), Ast::Variable("x".into()).into()),
         ctx,
     )
     .map_err(|a| a.0)?;
@@ -714,15 +820,16 @@ fn lambda() -> Result<(), CheckingError> {
 #[test]
 fn idunit() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (ty, omega) =
-        synth(Term::Application(id_fn().into(), Term::Unit.into()), ctx).map_err(|a| a.0)?;
+    let (a, ty, omega) =
+        synth(Ast::Application(id_fn().into(), Ast::Unit.into()), ctx).map_err(|a| a.0)?;
+    assert!(omega.is_complete());
     assert_eq!(Type::Unit, apply_context(&omega, ty));
     Ok(())
 }
 
-fn id_fn() -> Term {
-    Term::Annotation(
-        Term::Abstraction("x".into(), Term::Variable("x".into()).into()).into(),
+fn id_fn() -> Ast<String> {
+    Ast::Annotation(
+        Ast::Abstraction("x".into(), Ast::Variable("x".into()).into()).into(),
         Box::new(Type::Quantification(
             "t".into(),
             Type::Function(
@@ -737,11 +844,11 @@ fn id_fn() -> Term {
 fn nested_to_string() -> Result<(), CheckingError> {
     let ctx = Context::new();
     let ctx2 = Context::new();
-    let app = Term::Application(
-        Term::Annotation(
-            Box::new(Term::Abstraction(
+    let app = Ast::Application(
+        Ast::Annotation(
+            Box::new(Ast::Abstraction(
                 "x".into(),
-                Term::Functor("Option".to_owned(), Term::LitBool(false).into()).into(),
+                Ast::Functor("Option".to_owned(), Ast::LitBool(false).into()).into(),
             )),
             Type::Function(
                 Type::HigherKinded(None, vec![Some(Type::BaseType("int".into()))], true).into(),
@@ -755,11 +862,12 @@ fn nested_to_string() -> Result<(), CheckingError> {
             .into(),
         )
         .into(),
-        Term::Functor("Option".into(), Term::LitInt(23).into()).into(),
+        Ast::Functor("Option".into(), Ast::LitInt(23).into()).into(),
     );
     println!("{app}");
-    let (ty, omega) = synth(app, ctx).map_err(|a| a.0)?;
+    let (a, ty, omega) = synth(app, ctx).map_err(|a| a.0)?;
     println!("{omega}");
+    assert!(omega.is_complete());
     assert_eq!(
         Type::HigherKinded(
             Some("Option".to_owned()),
@@ -773,15 +881,63 @@ fn nested_to_string() -> Result<(), CheckingError> {
 #[test]
 fn let_with_fun() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (ty, omega) = synth(
-        Term::Let(
+    let (a, ty, omega) = synth(
+        Ast::Let(
             "id".to_owned(),
             id_fn().into(),
-            Term::Application(Term::Variable("id".to_owned()).into(), Term::Unit.into()).into(),
+            Ast::Application(Ast::Variable("id".to_owned()).into(), Ast::Unit.into()).into(),
         ),
         ctx,
     )
     .map_err(|a| a.0)?;
     assert_eq!(Type::Unit, apply_context(&omega, ty));
+    Ok(())
+}
+#[test]
+fn tuples() -> Result<(), CheckingError> {
+    let ctx = Context::new();
+    let (a, ty, omega) = synth(
+        Ast::Tuple(vec![
+            Ast::Application(
+                Ast::Annotation(
+                    Box::new(Ast::Abstraction(
+                        "x".into(),
+                        Ast::Functor("Option".to_owned(), Ast::LitBool(false).into()).into(),
+                    )),
+                    Type::Function(
+                        Type::HigherKinded(None, vec![Some(Type::BaseType("int".into()))], true)
+                            .into(),
+                        Type::HigherKinded(
+                            Some("Option".to_owned()),
+                            vec![Some(Type::BaseType("bool".into()))],
+                            false,
+                        )
+                        .into(),
+                    )
+                    .into(),
+                )
+                .into(),
+                Ast::Functor("Option".into(), Ast::LitInt(23).into()).into(),
+            ),
+            Ast::Let(
+                "id".to_owned(),
+                id_fn().into(),
+                Ast::Application(Ast::Variable("id".to_owned()).into(), Ast::Unit.into()).into(),
+            ),
+        ]),
+        ctx,
+    )
+    .map_err(|a| a.0)?;
+    assert_eq!(
+        Type::Product(vec![
+            Type::HigherKinded(
+                Some("Option".to_owned()),
+                vec![Some(Type::BaseType("bool".into()))],
+                false
+            ),
+            Type::Unit
+        ]),
+        apply_context(&omega, ty)
+    );
     Ok(())
 }
