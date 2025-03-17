@@ -2,16 +2,19 @@
 #![allow(clippy::uninlined_format_args)]
 mod lower;
 mod types;
+mod unique_idents;
 
 use core::panic;
-use std::mem;
 use types::Ast;
 use types::CheckingError;
 use types::Context;
 use types::ContextElement;
 use types::Type;
 use types::TypedVar;
+use unique_idents::idents_to_ids;
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct VarId(pub usize);
 impl Context {
     const fn new() -> Self {
         Self {
@@ -21,30 +24,29 @@ impl Context {
             ident_level: 0,
         }
     }
-    fn indent(&mut self) -> usize {
+    const fn indent(&mut self) -> usize {
         self.ident_level += 1;
         self.ident_level
     }
-    fn unindent(&mut self) -> usize {
+    const fn unindent(&mut self) -> usize {
         self.ident_level -= 1;
         self.ident_level
     }
-    fn fresh_existential(&mut self) -> String {
-        let result = format!("t{}", self.existentials);
+    fn fresh_existential(&mut self) -> VarId {
         self.existentials += 1;
-        result
+        VarId(self.existentials)
     }
     fn is_well_formed(&self, ty: &Type) -> bool {
         match ty {
             Type::Unit | Type::BaseType(_) => true,
-            Type::Variable(var) => self.contains(ContextElement::Variable(var.to_string())),
+            Type::Variable(var) => self.contains(&ContextElement::Variable(var.clone())),
             Type::Existential(alpha_hat) => {
-                self.contains(ContextElement::Existential(alpha_hat.to_string()))
+                self.contains(&ContextElement::Existential(*alpha_hat))
                     || self.get_solved(alpha_hat).is_some()
             }
             Type::Quantification(alpha_hat, ty) => self
                 .clone()
-                .extend(ContextElement::Existential(alpha_hat.to_string()))
+                .extend(ContextElement::Existential(alpha_hat.clone()))
                 .is_well_formed(ty),
             Type::Function(a, b) => self.is_well_formed(a) && self.is_well_formed(b),
             Type::HigherKinded(_, generics, open) => generics
@@ -54,8 +56,8 @@ impl Context {
             Type::Sum(vec) => vec.iter().all(|a| self.is_well_formed(a)),
         }
     }
-    fn contains(&self, c: ContextElement) -> bool {
-        self.elements.iter().any(|elem| elem == &c)
+    fn contains(&self, c: &ContextElement) -> bool {
+        self.elements.iter().any(|elem| elem == c)
     }
     fn any_matches<F: FnMut(&ContextElement) -> bool>(&self, f: F) -> bool {
         self.elements.iter().any(f)
@@ -85,29 +87,23 @@ impl Context {
             .iter()
             .position(|elem| elem == &alpha)
             .unwrap_or_else(|| panic!("Could not find {} in context to drop", alpha));
-        let mut elements = self.elements.clone();
+        let mut elements = self.elements;
         let rest = elements.split_off(pos);
-        Self {
-            elements,
-            ..self.clone()
-        }
+        Self { elements, ..self }
     }
     /// Γ, α, Γ' ->  Γ, β, Γ'
-    fn insert_at(&self, alpha: &ContextElement, beta: Vec<ContextElement>) -> Self {
+    fn insert_at(self, alpha: &ContextElement, beta: Vec<ContextElement>) -> Self {
         let pos = self
             .elements
             .iter()
             .position(|elem| elem == alpha)
             .unwrap_or_else(|| panic!("Could not find {} in context to replace", alpha));
-        let mut elements = self.elements.clone();
+        let mut elements = self.elements;
         elements.splice(pos..=pos, beta);
-        Self {
-            elements,
-            ..self.clone()
-        }
+        Self { elements, ..self }
     }
     /// Γ -> Γ [^α = τ]
-    fn get_solved(&self, alpha_hat: &str) -> Option<&Type> {
+    fn get_solved(&self, alpha_hat: &VarId) -> Option<&Type> {
         println!(
             "{} looking for {alpha_hat} in {self}",
             "-".repeat(self.ident_level)
@@ -122,7 +118,7 @@ impl Context {
         None
     }
     /// Γ -> Γ [^α = τ]
-    fn get_annotation(&self, alpha_hat: &str) -> Option<&Type> {
+    fn get_annotation(&self, alpha_hat: &VarId) -> Option<&Type> {
         for elem in &self.elements {
             if let ContextElement::TypedVariable(a, b) = elem {
                 if alpha_hat == a {
@@ -136,10 +132,10 @@ impl Context {
     /// instantiate ^α to a subtype of A
     fn instantiate(
         mut self,
-        alpha_hat: String,
+        alpha_hat: VarId,
         ty: Type,
         dir: Direction,
-    ) -> Result<Context, (CheckingError, Context)> {
+    ) -> Result<Self, (CheckingError, Self)> {
         println!(
             "{} instantiate {alpha_hat} to a subtype of {ty} under Context {self}",
             "-".repeat(self.indent())
@@ -155,11 +151,13 @@ impl Context {
             (ref ty @ Type::Existential(ref beta), _) => {
                 println!("{:>20}", "InstLReach");
                 assert!(rest.is_well_formed(ty));
-                Ok(
-                    self.insert_at(&ContextElement::Existential(beta.to_string()), vec![
-                        ContextElement::Solved(beta.to_string(), (Type::Existential(alpha_hat))),
-                    ]),
-                )
+                Ok(self.insert_at(
+                    &ContextElement::Existential(beta.clone()),
+                    vec![ContextElement::Solved(
+                        beta.clone(),
+                        (Type::Existential(alpha_hat)),
+                    )],
+                ))
             }
             (Type::Quantification(beta, ty), Direction::Left) => {
                 println!("{:>20}", "InstLAllR");
@@ -167,7 +165,7 @@ impl Context {
                 let mut extended_gamma = self.extend(ContextElement::Existential(beta_hat));
                 let delta = extended_gamma
                     .instantiate(alpha_hat, *ty, Direction::Left)?
-                    .drop(ContextElement::Existential(beta.to_string()));
+                    .drop(ContextElement::Existential(beta));
                 Ok(delta)
             }
             (Type::Quantification(beta, ty), Direction::Right) => {
@@ -179,7 +177,7 @@ impl Context {
                 let delta = extended_gamma
                     .instantiate(
                         alpha_hat,
-                        substitute_existential(&beta_hat, &Type::Variable(beta.to_string()), *ty),
+                        substitute_existential(&beta_hat, &Type::Variable(beta), *ty),
                         Direction::Right,
                     )?
                     .drop_scope();
@@ -189,23 +187,29 @@ impl Context {
                 println!("{:>20}", "InstArr");
                 let alpha_hat1 = self.fresh_existential();
                 let alpha_hat2 = self.fresh_existential();
-                let extended_gamma = self.insert_at(&alpha, vec![
-                    ContextElement::Existential(alpha_hat1.clone()),
-                    ContextElement::Existential(alpha_hat2.clone()),
-                    ContextElement::Solved(
-                        alpha_hat,
-                        Type::Function(
-                            Box::new(Type::Existential(alpha_hat1.clone())),
-                            Box::new(Type::Existential(alpha_hat2.clone())),
+                let extended_gamma = self.insert_at(
+                    &alpha,
+                    vec![
+                        ContextElement::Existential(alpha_hat1.clone()),
+                        ContextElement::Existential(alpha_hat2.clone()),
+                        ContextElement::Solved(
+                            alpha_hat,
+                            Type::Function(
+                                Box::new(Type::Existential(alpha_hat1.clone())),
+                                Box::new(Type::Existential(alpha_hat2.clone())),
+                            ),
                         ),
-                    ),
-                ]);
+                    ],
+                );
                 let mut theta = extended_gamma.instantiate(alpha_hat1, *a, dir.flip())?;
-                let b = apply_context(&theta, *b.clone());
+                let b = apply_context(&theta, *b);
                 let delta = theta.instantiate(alpha_hat2, b, dir);
                 delta
             }
-            (t, dir) => Err((CheckingError::InvalidInstantiation(t, alpha_hat), self)),
+            (t, dir) => Err((
+                CheckingError::InvalidInstantiation(t, alpha_hat.to_string()),
+                self,
+            )),
         };
         t.map(|mut a| {
             println!(
@@ -236,10 +240,10 @@ impl Context {
         (l, r)
     }
     /// Γ == ∆, ^α
-    fn has_existential(&self, alpha_hat: &str) -> bool {
+    fn has_existential(&self, alpha_hat: VarId) -> bool {
         self.elements
             .iter()
-            .any(|elem| elem == &ContextElement::Existential(alpha_hat.to_string()))
+            .any(|elem| elem == &ContextElement::Existential(alpha_hat))
     }
 }
 
@@ -249,16 +253,16 @@ enum Direction {
     Right,
 }
 impl Direction {
-    fn flip(&self) -> Self {
+    const fn flip(self) -> Self {
         match self {
-            Direction::Left => Direction::Right,
-            Direction::Right => Direction::Left,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
         }
     }
 }
 
 fn check(
-    e: Ast<String>,
+    e: Ast<VarId>,
     ty: &Type,
     ctx: Context,
 ) -> Result<(Ast<TypedVar>, Context), (CheckingError, Context)> {
@@ -276,7 +280,7 @@ fn check(
             println!("{:>20}", "∀I");
             let mut extendet_gamma = ctx
                 .mark_scope()
-                .extend(ContextElement::Variable(name.to_string()));
+                .extend(ContextElement::Variable(name.clone()));
             let (ast_prime, delta) = check(e, ty, extendet_gamma)?;
             return Ok((ast_prime, delta.drop_scope()));
         }
@@ -284,7 +288,7 @@ fn check(
             println!("{:>20}", "->I");
             let typed = ContextElement::TypedVariable(x.clone(), *a.clone());
             let extended_gamma = ctx.mark_scope().extend(typed);
-            let (ast_prime, delta) = check(*term, &*b, extended_gamma)?;
+            let (ast_prime, delta) = check(*term, b, extended_gamma)?;
             return Ok((
                 Ast::Abstraction(TypedVar(x, *a.clone()), Box::new(ast_prime)),
                 delta.drop_scope(),
@@ -312,7 +316,7 @@ fn check(
             println!("{:>20}", "Sub");
             let (typed_e, a, theta) = synth(e, ctx)?;
             subtype(
-                apply_context(&theta, a.clone()),
+                apply_context(&theta, a),
                 apply_context(&theta, ty.clone()),
                 theta,
             )
@@ -325,7 +329,7 @@ fn check(
     })
 }
 fn synth<'a>(
-    e: Ast<String>,
+    e: Ast<VarId>,
     mut ctx: Context,
 ) -> Result<(Ast<TypedVar>, Type, Context), (CheckingError, Context)> {
     let indent = ctx.indent();
@@ -343,8 +347,7 @@ fn synth<'a>(
                 Err((CheckingError::UnannotatedVariable(name), ctx))
             }
         }
-        i @ Ast::LitInt(_) => Ok((i.typed(), Type::BaseType("int".to_owned()), ctx)),
-        b @ Ast::LitBool(_) => Ok((b.typed(), Type::BaseType("bool".to_owned()), ctx)),
+        Ast::LitInt(i) => Ok((Ast::LitInt(i), Type::BaseType("int".to_owned()), ctx)),
         Ast::Unit => {
             println!("{:>20}", "1I=>");
             Ok((Ast::Unit, Type::Unit, ctx))
@@ -368,7 +371,7 @@ fn synth<'a>(
                 ),
                 Type::Function(
                     Box::new(Type::Existential(alpha_hat)),
-                    Box::new(Type::Existential(beta_hat.clone())),
+                    Box::new(Type::Existential(beta_hat)),
                 ),
                 delta,
             ))
@@ -399,14 +402,14 @@ fn synth<'a>(
                 |elem| matches!(elem, ContextElement::TypedVariable(name1, _) if *name1 == name),
             ) {
                 return Err((CheckingError::DoubelyInitializedVariable(name), ctx));
-            };
+            }
             let (typed_term, a, theta) = synth(*term, ctx)?;
             let (typed_term1, b, delta) = synth(
                 *term1,
                 theta.extend(ContextElement::TypedVariable(name.clone(), a.clone())),
             )?;
             Ok((
-                Ast::Let(TypedVar(name, a), typed_term.into(), typed_term1.into()).into(),
+                Ast::Let(TypedVar(name, a), typed_term.into(), typed_term1.into()),
                 b,
                 delta,
             ))
@@ -438,7 +441,7 @@ fn synth<'a>(
 }
 fn synth_function(
     a: Type,
-    e: Ast<String>,
+    e: Ast<VarId>,
     mut ctx: Context,
 ) -> Result<(Ast<TypedVar>, Type, Context), (CheckingError, Context)> {
     println!("synthesizing type if {a} is applied to {e} under Context {ctx}");
@@ -447,19 +450,21 @@ fn synth_function(
             println!("{:>20}", "α^App");
             let alpha_hat1 = ctx.fresh_existential();
             let alpha_hat2 = ctx.fresh_existential();
-            let extended_gamma =
-                ctx.insert_at(&ContextElement::Existential(alpha_hat.to_string()), vec![
+            let extended_gamma = ctx.insert_at(
+                &ContextElement::Existential(alpha_hat.clone()),
+                vec![
                     (ContextElement::Existential(alpha_hat1.clone())),
                     (ContextElement::Existential(alpha_hat2.clone())),
                     (ContextElement::Solved(
-                        alpha_hat.to_string(),
+                        alpha_hat,
                         Type::Function(
                             Box::new(Type::Existential(alpha_hat1.clone())),
                             Box::new(Type::Existential(alpha_hat2.clone())),
                         ),
                     )),
-                ]);
-            let (typed_e, delta) = check(e, &Type::Existential(alpha_hat1), ctx)?;
+                ],
+            );
+            let (typed_e, delta) = check(e, &Type::Existential(alpha_hat1), extended_gamma)?;
             Ok((typed_e, Type::Existential(alpha_hat2), delta))
         }
         Type::Quantification(alpha, ty) => {
@@ -467,7 +472,7 @@ fn synth_function(
             let alpha_hat = ctx.fresh_existential();
             let extendet_gamma = ctx.extend(ContextElement::Existential(alpha_hat.clone()));
             synth_function(
-                substitute_existential(&alpha, &Type::Existential(alpha_hat.to_string()), *ty),
+                substitute_existential(&alpha, &Type::Existential(alpha_hat.clone()), *ty),
                 e,
                 extendet_gamma,
             )
@@ -612,7 +617,7 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
             println!("{:>20}", "<:∀R");
             let extendet_gamma = ctx
                 .mark_scope()
-                .extend(ContextElement::Variable(name.to_string()));
+                .extend(ContextElement::Variable(name.clone()));
             let delta = subtype(a, *b.clone(), extendet_gamma)?.drop_scope();
             return Ok(delta);
         }
@@ -652,10 +657,10 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
             Err((CheckingError::AllOptionsFailed(errs), duped_gamma))
         }
         (Type::Existential(alpha_hat), ty) => {
-            ctx.instantiate(alpha_hat.to_string(), ty, Direction::Left)
+            ctx.instantiate(alpha_hat.clone(), ty, Direction::Left)
         }
         (ty, Type::Existential(ref alpha_hat)) => {
-            ctx.instantiate(alpha_hat.to_string(), ty, Direction::Right)
+            ctx.instantiate(alpha_hat.clone(), ty, Direction::Right)
         }
         (a, b) => Err((CheckingError::TypeMissmatch(a, b), ctx)),
     };
@@ -667,7 +672,7 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
 }
 
 /// FV(A)
-fn occurs_check(alpha_hat: &String, ty: &Type) -> bool {
+fn occurs_check(alpha_hat: &VarId, ty: &Type) -> bool {
     match ty {
         Type::Unit | Type::BaseType(_) => false,
         Type::Variable(a) | Type::Existential(a) => a == alpha_hat,
@@ -681,7 +686,7 @@ fn occurs_check(alpha_hat: &String, ty: &Type) -> bool {
     }
 }
 /// substitutes all occurances of one existential `alpha_hat` with concrete type `alpha` in `ty`
-fn substitute_existential(alpha_hat: &String, alpha: &Type, ty: Type) -> Type {
+fn substitute_existential(alpha_hat: &VarId, alpha: &Type, ty: Type) -> Type {
     match ty {
         Type::Unit => Type::Unit,
         Type::BaseType(_) => ty,
@@ -701,10 +706,10 @@ fn substitute_existential(alpha_hat: &String, alpha: &Type, ty: Type) -> Type {
         }
         Type::Quantification(a, b) => {
             if *alpha_hat == a {
-                Type::Quantification(a.to_string(), Box::new(Type::Quantification(a, b)))
+                Type::Quantification(a.clone(), Box::new(Type::Quantification(a, b)))
             } else {
                 Type::Quantification(
-                    a.to_string(),
+                    a.clone(),
                     Box::new(substitute_existential(alpha_hat, alpha, *b.clone())),
                 )
             }
@@ -786,14 +791,12 @@ fn basic() -> Result<(), CheckingError> {
 #[test]
 fn application() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (a, ty, omega) = synth(
-        Ast::Application(
-            Ast::Abstraction("x".into(), Ast::Variable("x".into()).into()).into(),
-            Box::new(Ast::Unit),
-        ),
-        ctx,
-    )
-    .map_err(|a| a.0)?;
+    let e = Ast::Application(
+        Ast::Abstraction("x".into(), Ast::Variable("x".into()).into()).into(),
+        Box::new(Ast::Unit),
+    );
+    let (e, id) = idents_to_ids(e);
+    let (a, ty, omega) = synth(e, ctx).map_err(|a| a.0)?;
     assert!(omega.is_complete());
     assert_eq!(Type::Unit, apply_context(&omega, ty));
     Ok(())
@@ -802,11 +805,9 @@ fn application() -> Result<(), CheckingError> {
 #[test]
 fn lambda() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (a, ty, omega) = synth(
-        Ast::Abstraction("x".into(), Ast::Variable("x".into()).into()),
-        ctx,
-    )
-    .map_err(|a| a.0)?;
+    let e = Ast::Abstraction("x".into(), Ast::Variable("x".into()).into());
+    let (e, id) = idents_to_ids(e);
+    let (a, ty, omega) = synth(e, ctx).map_err(|a| a.0)?;
     assert_eq!(
         apply_context(&omega, ty),
         Type::Function(
@@ -820,8 +821,10 @@ fn lambda() -> Result<(), CheckingError> {
 #[test]
 fn idunit() -> Result<(), CheckingError> {
     let ctx = Context::new();
+    let e = id_fn();
+    let (e, id) = idents_to_ids(e);
     let (a, ty, omega) =
-        synth(Ast::Application(id_fn().into(), Ast::Unit.into()), ctx).map_err(|a| a.0)?;
+        synth(Ast::Application(e.into(), Ast::Unit.into()), ctx).map_err(|a| a.0)?;
     assert!(omega.is_complete());
     assert_eq!(Type::Unit, apply_context(&omega, ty));
     Ok(())
@@ -848,13 +851,13 @@ fn nested_to_string() -> Result<(), CheckingError> {
         Ast::Annotation(
             Box::new(Ast::Abstraction(
                 "x".into(),
-                Ast::Functor("Option".to_owned(), Ast::LitBool(false).into()).into(),
+                Ast::Functor("Option".to_owned(), Ast::LitInt(3).into()).into(),
             )),
             Type::Function(
                 Type::HigherKinded(None, vec![Some(Type::BaseType("int".into()))], true).into(),
                 Type::HigherKinded(
                     Some("Option".to_owned()),
-                    vec![Some(Type::BaseType("bool".into()))],
+                    vec![Some(Type::BaseType("int".into()))],
                     false,
                 )
                 .into(),
@@ -865,13 +868,13 @@ fn nested_to_string() -> Result<(), CheckingError> {
         Ast::Functor("Option".into(), Ast::LitInt(23).into()).into(),
     );
     println!("{app}");
-    let (a, ty, omega) = synth(app, ctx).map_err(|a| a.0)?;
-    println!("{omega}");
+    let (e, id) = idents_to_ids(app);
+    let (a, ty, omega) = synth(e, ctx).map_err(|a| a.0)?;
     assert!(omega.is_complete());
     assert_eq!(
         Type::HigherKinded(
             Some("Option".to_owned()),
-            vec![Some(Type::BaseType("bool".into()))],
+            vec![Some(Type::BaseType("int".into()))],
             false
         ),
         apply_context(&omega, ty)
@@ -881,63 +884,59 @@ fn nested_to_string() -> Result<(), CheckingError> {
 #[test]
 fn let_with_fun() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (a, ty, omega) = synth(
-        Ast::Let(
-            "id".to_owned(),
-            id_fn().into(),
-            Ast::Application(Ast::Variable("id".to_owned()).into(), Ast::Unit.into()).into(),
-        ),
-        ctx,
-    )
-    .map_err(|a| a.0)?;
+    let e = Ast::Let(
+        "id".to_owned(),
+        id_fn().into(),
+        Ast::Application(Ast::Variable("id".to_owned()).into(), Ast::Unit.into()).into(),
+    );
+    let (e, id) = idents_to_ids(e);
+    let (a, ty, omega) = synth(e, ctx).map_err(|a| a.0)?;
     assert_eq!(Type::Unit, apply_context(&omega, ty));
     Ok(())
 }
 #[test]
 fn tuples() -> Result<(), CheckingError> {
     let ctx = Context::new();
-    let (a, ty, omega) = synth(
-        Ast::Tuple(vec![
-            Ast::Application(
-                Ast::Annotation(
-                    Box::new(Ast::Abstraction(
-                        "x".into(),
-                        Ast::Functor("Option".to_owned(), Ast::LitBool(false).into()).into(),
-                    )),
-                    Type::Function(
-                        Type::HigherKinded(None, vec![Some(Type::BaseType("int".into()))], true)
-                            .into(),
-                        Type::HigherKinded(
-                            Some("Option".to_owned()),
-                            vec![Some(Type::BaseType("bool".into()))],
-                            false,
-                        )
-                        .into(),
+    let e = Ast::Tuple(vec![
+        Ast::Application(
+            Ast::Annotation(
+                Box::new(Ast::Abstraction(
+                    "x".into(),
+                    Ast::Functor("Option".to_owned(), Ast::LitInt(48).into()).into(),
+                )),
+                Type::Function(
+                    Type::HigherKinded(None, vec![Some(Type::BaseType("int".into()))], true).into(),
+                    Type::HigherKinded(
+                        Some("Option".to_owned()),
+                        vec![Some(Type::BaseType("int".into()))],
+                        false,
                     )
                     .into(),
                 )
                 .into(),
-                Ast::Functor("Option".into(), Ast::LitInt(23).into()).into(),
-            ),
-            Ast::Let(
-                "id".to_owned(),
-                id_fn().into(),
-                Ast::Application(Ast::Variable("id".to_owned()).into(), Ast::Unit.into()).into(),
-            ),
-        ]),
-        ctx,
-    )
-    .map_err(|a| a.0)?;
+            )
+            .into(),
+            Ast::Functor("Option".into(), Ast::LitInt(23).into()).into(),
+        ),
+        Ast::Let(
+            "id".to_owned(),
+            id_fn().into(),
+            Ast::Application(Ast::Variable("id".to_owned()).into(), Ast::Unit.into()).into(),
+        ),
+    ]);
+    let (e, names) = idents_to_ids(e);
+    let (a, ty, omega) = synth(e, ctx).map_err(|a| a.0)?;
     assert_eq!(
         Type::Product(vec![
             Type::HigherKinded(
                 Some("Option".to_owned()),
-                vec![Some(Type::BaseType("bool".into()))],
+                vec![Some(Type::BaseType("int".into()))],
                 false
             ),
             Type::Unit
         ]),
         apply_context(&omega, ty)
     );
+    panic!();
     Ok(())
 }

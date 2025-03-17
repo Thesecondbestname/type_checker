@@ -1,11 +1,9 @@
 use std::hash::DefaultHasher;
 
 use crate::{
-    apply_context,
+    VarId, apply_context,
     types::{Ast, Context},
 };
-
-struct VarId(usize);
 
 struct Var<'a> {
     id: VarId,

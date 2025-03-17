@@ -1,8 +1,11 @@
 use core::{fmt, panic};
 use std::{
+    any::TypeId,
     fmt::Write,
     mem::{self, transmute},
 };
+
+use crate::VarId;
 
 pub(crate) enum Ast<Var> {
     Variable(Var),
@@ -14,42 +17,41 @@ pub(crate) enum Ast<Var> {
     Let(Var, Box<Self>, Box<Self>),
     Tuple(Vec<Self>),
     LitInt(usize),
-    LitBool(bool),
 }
-pub struct TypedVar(pub String, pub Type);
+pub struct TypedVar(pub VarId, pub Type);
 /// 1 | α | ^α | ∀α. A | A →  B | (A, B) | (A | B) | F[α]
 #[derive(PartialEq, Debug, Clone, Eq)]
 pub(crate) enum Type {
     /// 1
     Unit,
     /// α
-    Variable(String),
+    Variable(VarId),
     /// ^α MAYBE SOLVED!!
-    Existential(String),
+    Existential(VarId),
     /// ∀α. A
-    Quantification(String, Box<Type>),
+    Quantification(VarId, Box<Self>),
     /// A →  B
-    Function(Box<Type>, Box<Type>),
+    Function(Box<Self>, Box<Self>),
     /// Tuple (A,B,C)
-    Product(Vec<Type>),
+    Product(Vec<Self>),
     /// Enum Tuple (A + B + C)
-    Sum(Vec<Type>),
+    Sum(Vec<Self>),
     /// Named Type
     BaseType(String),
     /// Option[T, ..], F[_]
-    HigherKinded(Option<String>, Vec<Option<Type>>, bool),
+    HigherKinded(Option<String>, Vec<Option<Self>>, bool),
 }
 /// Θ ::= · | Γ, α | Γ, x : A | Γ, ^α | Γ, ^α = τ | Γ, I^
 #[derive(PartialEq, Debug, Clone, Eq)]
 pub(crate) enum ContextElement {
     /// Γ, α
-    Variable(String),
+    Variable(VarId),
     /// Γ, x : A
-    TypedVariable(String, Type),
+    TypedVariable(VarId, Type),
     /// Γ, ^α
-    Existential(String),
+    Existential(VarId),
     /// Γ, ^α = τ
-    Solved(String, Type),
+    Solved(VarId, Type),
 }
 /// As the context needs to be ordered, it is implemented as a simple Vector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,11 +65,11 @@ pub(crate) struct Context {
 struct Existential(usize);
 #[derive(Debug)]
 pub(crate) enum CheckingError {
-    UnannotatedVariable(String),
-    DoubelyInitializedVariable(String),
+    UnannotatedVariable(VarId),
+    DoubelyInitializedVariable(VarId),
     // Expected, found
     TypeMissmatch(Type, Type),
-    AllOptionsFailed(Vec<CheckingError>),
+    AllOptionsFailed(Vec<Self>),
     InvalidInstantiation(Type, String),
     NotWellFormed(Type),
     MissmatchedArity(Type, Type),
@@ -97,7 +99,7 @@ impl fmt::Display for ContextElement {
     }
 }
 
-impl<T: std::fmt::Display> fmt::Display for Ast<T> {
+impl<T: std::fmt::Display + Clone> fmt::Display for Ast<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
             Ast::Unit => write!(f, "()"),
@@ -105,7 +107,6 @@ impl<T: std::fmt::Display> fmt::Display for Ast<T> {
             Ast::Abstraction(alpha, e) => write!(f, "(\\{} -> {})", alpha, e),
             Ast::Application(e1, e2) => write!(f, "{} {}", e1, e2),
             Ast::Annotation(e, a) => write!(f, "({}: {})", e, a),
-            Ast::LitBool(b) => write!(f, "{b}"),
             Ast::LitInt(i) => write!(f, "{i}"),
             Ast::Functor(name, term) => write!(f, "{name}::new({term})"),
             Ast::Let(name, term, term1) => write!(f, "let {name} = {term} in {term1}"),
@@ -123,6 +124,11 @@ impl<T: std::fmt::Display> fmt::Display for Ast<T> {
 impl fmt::Display for TypedVar {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "({}: {})", self.0, self.1)
+    }
+}
+impl fmt::Display for VarId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 impl fmt::Display for Type {
@@ -166,16 +172,6 @@ impl ContextElement {
             ContextElement::TypedVariable(name, ty) => TypedVar(name, ty),
             ContextElement::Solved(name, ty) => TypedVar(name, ty),
             _ => panic!("Context Element not solved!"),
-        }
-    }
-}
-impl Ast<String> {
-    pub fn typed(self) -> Ast<TypedVar> {
-        match self {
-            Ast::LitBool(b) => Ast::LitBool(b),
-            Ast::LitInt(i) => Ast::LitInt(i),
-            Ast::Unit => Ast::Unit,
-            _ => panic!("Don't do that..."),
         }
     }
 }
