@@ -15,6 +15,8 @@ use unique_idents::idents_to_ids;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct VarId(pub usize);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TyId(pub usize);
 impl Context {
     const fn new() -> Self {
         Self {
@@ -36,17 +38,17 @@ impl Context {
         self.existentials += 1;
         VarId(self.existentials)
     }
-    fn is_well_formed(&self, ty: &Type) -> bool {
+    fn is_well_formed(&self, ty: &Type<VarId>) -> bool {
         match ty {
             Type::Unit | Type::BaseType(_) => true,
-            Type::Variable(var) => self.contains(&ContextElement::Variable(var.clone())),
+            Type::Variable(var) => self.contains(&ContextElement::Variable(*var)),
             Type::Existential(alpha_hat) => {
                 self.contains(&ContextElement::Existential(*alpha_hat))
                     || self.get_solved(alpha_hat).is_some()
             }
             Type::Quantification(alpha_hat, ty) => self
                 .clone()
-                .extend(ContextElement::Existential(alpha_hat.clone()))
+                .extend(ContextElement::Existential(*alpha_hat))
                 .is_well_formed(ty),
             Type::Function(a, b) => self.is_well_formed(a) && self.is_well_formed(b),
             Type::HigherKinded(_, generics, open) => generics
@@ -65,6 +67,24 @@ impl Context {
     fn mark_scope(mut self) -> Self {
         self.markers.push(self.elements.len());
         self
+    }
+    fn begin_scope_with(mut self, elem: ContextElement) -> Self {
+        self.elements.push(elem);
+        self.markers.push(self.elements.len());
+        self
+    }
+    fn drop_scope_get_back(mut self) -> (ContextElement, Self) {
+        let x = self
+            .markers
+            .pop()
+            .expect("Called drop_mark without having called mark");
+        self.elements.drain(x + 1..);
+        (
+            self.elements
+                .pop()
+                .expect("Called drop_scope_get_back without having called begin_scope_with"),
+            self,
+        )
     }
     fn drop_scope(mut self) -> Self {
         let x = self
@@ -103,7 +123,7 @@ impl Context {
         Self { elements, ..self }
     }
     /// Γ -> Γ [^α = τ]
-    fn get_solved(&self, alpha_hat: &VarId) -> Option<&Type> {
+    fn get_solved(&self, alpha_hat: &VarId) -> Option<&Type<VarId>> {
         println!(
             "{} looking for {alpha_hat} in {self}",
             "-".repeat(self.ident_level)
@@ -118,7 +138,7 @@ impl Context {
         None
     }
     /// Γ -> Γ [^α = τ]
-    fn get_annotation(&self, alpha_hat: &VarId) -> Option<&Type> {
+    fn get_annotation(&self, alpha_hat: &VarId) -> Option<&Type<VarId>> {
         for elem in &self.elements {
             if let ContextElement::TypedVariable(a, b) = elem {
                 if alpha_hat == a {
@@ -133,7 +153,7 @@ impl Context {
     fn instantiate(
         mut self,
         alpha_hat: VarId,
-        ty: Type,
+        ty: Type<VarId>,
         dir: Direction,
     ) -> Result<Self, (CheckingError, Self)> {
         println!(
@@ -141,7 +161,7 @@ impl Context {
             "-".repeat(self.indent())
         );
         assert!(!occurs_check(&alpha_hat, &ty));
-        let mut alpha = ContextElement::Existential(alpha_hat.clone());
+        let mut alpha = ContextElement::Existential(alpha_hat);
         let (begin, rest) = &self.clone().split_at(&alpha);
         if ty.is_monotype() && begin.is_well_formed(&ty) {
             println!("{:>20}", "InstLSolve");
@@ -151,13 +171,9 @@ impl Context {
             (ref ty @ Type::Existential(ref beta), _) => {
                 println!("{:>20}", "InstLReach");
                 assert!(rest.is_well_formed(ty));
-                Ok(self.insert_at(
-                    &ContextElement::Existential(beta.clone()),
-                    vec![ContextElement::Solved(
-                        beta.clone(),
-                        (Type::Existential(alpha_hat)),
-                    )],
-                ))
+                Ok(self.insert_at(&ContextElement::Existential(*beta), vec![
+                    ContextElement::Solved(*beta, (Type::Existential(alpha_hat))),
+                ]))
             }
             (Type::Quantification(beta, ty), Direction::Left) => {
                 println!("{:>20}", "InstLAllR");
@@ -173,11 +189,11 @@ impl Context {
                 let beta_hat = self.fresh_existential();
                 let extended_gamma = self
                     .mark_scope()
-                    .extend(ContextElement::Existential(beta_hat.clone()));
+                    .extend(ContextElement::Existential(beta_hat));
                 let delta = extended_gamma
                     .instantiate(
                         alpha_hat,
-                        substitute_existential(&beta_hat, &Type::Variable(beta), *ty),
+                        substitute_existential(&beta_hat, Type::Variable(beta), *ty),
                         Direction::Right,
                     )?
                     .drop_scope();
@@ -187,20 +203,17 @@ impl Context {
                 println!("{:>20}", "InstArr");
                 let alpha_hat1 = self.fresh_existential();
                 let alpha_hat2 = self.fresh_existential();
-                let extended_gamma = self.insert_at(
-                    &alpha,
-                    vec![
-                        ContextElement::Existential(alpha_hat1.clone()),
-                        ContextElement::Existential(alpha_hat2.clone()),
-                        ContextElement::Solved(
-                            alpha_hat,
-                            Type::Function(
-                                Box::new(Type::Existential(alpha_hat1.clone())),
-                                Box::new(Type::Existential(alpha_hat2.clone())),
-                            ),
+                let extended_gamma = self.insert_at(&alpha, vec![
+                    ContextElement::Existential(alpha_hat1),
+                    ContextElement::Existential(alpha_hat2),
+                    ContextElement::Solved(
+                        alpha_hat,
+                        Type::Function(
+                            Box::new(Type::Existential(alpha_hat1)),
+                            Box::new(Type::Existential(alpha_hat2)),
                         ),
-                    ],
-                );
+                    ),
+                ]);
                 let mut theta = extended_gamma.instantiate(alpha_hat1, *a, dir.flip())?;
                 let b = apply_context(&theta, *b);
                 let delta = theta.instantiate(alpha_hat2, b, dir);
@@ -263,7 +276,7 @@ impl Direction {
 
 fn check(
     e: Ast<VarId>,
-    ty: &Type,
+    ty: Type<VarId>,
     ctx: Context,
 ) -> Result<(Ast<TypedVar>, Context), (CheckingError, Context)> {
     let mut ctx = ctx;
@@ -278,19 +291,17 @@ fn check(
         }
         (e, Type::Quantification(name, ty)) => {
             println!("{:>20}", "∀I");
-            let mut extendet_gamma = ctx
-                .mark_scope()
-                .extend(ContextElement::Variable(name.clone()));
-            let (ast_prime, delta) = check(e, ty, extendet_gamma)?;
+            let mut extendet_gamma = ctx.mark_scope().extend(ContextElement::Variable(name));
+            let (ast_prime, delta) = check(e, *ty, extendet_gamma)?;
             return Ok((ast_prime, delta.drop_scope()));
         }
         (Ast::Abstraction(x, term), Type::Function(a, b)) => {
             println!("{:>20}", "->I");
-            let typed = ContextElement::TypedVariable(x.clone(), *a.clone());
+            let typed = ContextElement::TypedVariable(x, *a.clone());
             let extended_gamma = ctx.mark_scope().extend(typed);
-            let (ast_prime, delta) = check(*term, b, extended_gamma)?;
+            let (ast_prime, delta) = check(*term, *b, extended_gamma)?;
             return Ok((
-                Ast::Abstraction(TypedVar(x, *a.clone()), Box::new(ast_prime)),
+                Ast::Abstraction(TypedVar(x, *a), Box::new(ast_prime)),
                 delta.drop_scope(),
             ));
         }
@@ -305,7 +316,7 @@ fn check(
             let (typed_tail, delta) = check(
                 *tail,
                 ty,
-                theta.extend(ContextElement::TypedVariable(name.clone(), a.clone())),
+                theta.extend(ContextElement::TypedVariable(name, a.clone())),
             )?;
             return Ok((
                 Ast::Let(TypedVar(name, a), typed_expr.into(), typed_tail.into()),
@@ -315,12 +326,8 @@ fn check(
         (e, ty) => {
             println!("{:>20}", "Sub");
             let (typed_e, a, theta) = synth(e, ctx)?;
-            subtype(
-                apply_context(&theta, a),
-                apply_context(&theta, ty.clone()),
-                theta,
-            )
-            .map(|a| (typed_e, a))
+            subtype(apply_context(&theta, a), apply_context(&theta, ty), theta)
+                .map(|a| (typed_e, a))
         }
     };
     t.map(|mut a| {
@@ -328,10 +335,10 @@ fn check(
         a
     })
 }
-fn synth<'a>(
+fn synth(
     e: Ast<VarId>,
     mut ctx: Context,
-) -> Result<(Ast<TypedVar>, Type, Context), (CheckingError, Context)> {
+) -> Result<(Ast<TypedVar>, Type<VarId>, Context), (CheckingError, Context)> {
     let indent = ctx.indent();
     println!(
         "{} synthesizing Type for {e} under context {ctx}",
@@ -356,19 +363,15 @@ fn synth<'a>(
             println!("{:>20}", "->I=>");
             let alpha_hat = ctx.fresh_existential();
             let beta_hat = ctx.fresh_existential();
-            let typed =
-                ContextElement::TypedVariable(x.clone(), { Type::Existential(alpha_hat.clone()) });
+            let typed = ContextElement::TypedVariable(x, { Type::Existential(alpha_hat) });
             let extended_gamma = ctx
-                .extend(ContextElement::Existential(alpha_hat.clone()))
-                .extend(ContextElement::Existential(beta_hat.clone()))
+                .extend(ContextElement::Existential(alpha_hat))
+                .extend(ContextElement::Existential(beta_hat))
                 .mark_scope()
                 .extend(typed);
-            let (typed_e, delta) = check(*e, &Type::Existential(beta_hat.clone()), extended_gamma)?;
+            let (typed_e, delta) = check(*e, Type::Existential(beta_hat), extended_gamma)?;
             Ok((
-                Ast::Abstraction(
-                    TypedVar(x, Type::Existential(alpha_hat.clone())),
-                    typed_e.into(),
-                ),
+                Ast::Abstraction(TypedVar(x, Type::Existential(alpha_hat)), typed_e.into()),
                 Type::Function(
                     Box::new(Type::Existential(alpha_hat)),
                     Box::new(Type::Existential(beta_hat)),
@@ -378,7 +381,7 @@ fn synth<'a>(
         }
         Ast::Annotation(term, ty) => {
             println!("{:>20}", "Anno");
-            let (typed_term, delta) = check(*term, &ty, ctx)?;
+            let (typed_term, delta) = check(*term, *ty.clone(), ctx)?;
             Ok((typed_term, *ty, delta))
         }
         Ast::Application(e1, e2) => {
@@ -406,7 +409,7 @@ fn synth<'a>(
             let (typed_term, a, theta) = synth(*term, ctx)?;
             let (typed_term1, b, delta) = synth(
                 *term1,
-                theta.extend(ContextElement::TypedVariable(name.clone(), a.clone())),
+                theta.extend(ContextElement::TypedVariable(name, a.clone())),
             )?;
             Ok((
                 Ast::Let(TypedVar(name, a), typed_term.into(), typed_term1.into()),
@@ -440,46 +443,43 @@ fn synth<'a>(
     t
 }
 fn synth_function(
-    a: Type,
+    a: Type<VarId>,
     e: Ast<VarId>,
     mut ctx: Context,
-) -> Result<(Ast<TypedVar>, Type, Context), (CheckingError, Context)> {
+) -> Result<(Ast<TypedVar>, Type<VarId>, Context), (CheckingError, Context)> {
     println!("synthesizing type if {a} is applied to {e} under Context {ctx}");
     let t = match a {
         Type::Existential(alpha_hat) => {
             println!("{:>20}", "α^App");
             let alpha_hat1 = ctx.fresh_existential();
             let alpha_hat2 = ctx.fresh_existential();
-            let extended_gamma = ctx.insert_at(
-                &ContextElement::Existential(alpha_hat.clone()),
-                vec![
-                    (ContextElement::Existential(alpha_hat1.clone())),
-                    (ContextElement::Existential(alpha_hat2.clone())),
-                    (ContextElement::Solved(
-                        alpha_hat,
-                        Type::Function(
-                            Box::new(Type::Existential(alpha_hat1.clone())),
-                            Box::new(Type::Existential(alpha_hat2.clone())),
-                        ),
-                    )),
-                ],
-            );
-            let (typed_e, delta) = check(e, &Type::Existential(alpha_hat1), extended_gamma)?;
+            let extended_gamma = ctx.insert_at(&ContextElement::Existential(alpha_hat), vec![
+                (ContextElement::Existential(alpha_hat1)),
+                (ContextElement::Existential(alpha_hat2)),
+                (ContextElement::Solved(
+                    alpha_hat,
+                    Type::Function(
+                        Box::new(Type::Existential(alpha_hat1)),
+                        Box::new(Type::Existential(alpha_hat2)),
+                    ),
+                )),
+            ]);
+            let (typed_e, delta) = check(e, Type::Existential(alpha_hat1), extended_gamma)?;
             Ok((typed_e, Type::Existential(alpha_hat2), delta))
         }
         Type::Quantification(alpha, ty) => {
             println!("{:>20}", "∀App");
             let alpha_hat = ctx.fresh_existential();
-            let extendet_gamma = ctx.extend(ContextElement::Existential(alpha_hat.clone()));
+            let extendet_gamma = ctx.extend(ContextElement::Existential(alpha_hat));
             synth_function(
-                substitute_existential(&alpha, &Type::Existential(alpha_hat.clone()), *ty),
+                substitute_existential(&alpha, Type::Existential(alpha_hat), *ty),
                 e,
                 extendet_gamma,
             )
         }
         Type::Function(a, c) => {
             println!("{:>20}", "->App");
-            let (typed_e, delta) = check(e, &a, ctx)?;
+            let (typed_e, delta) = check(e, *a, ctx)?;
             Ok((typed_e, *c, delta))
         }
         _ => panic!(),
@@ -491,7 +491,11 @@ fn synth_function(
     t
 }
 /// Under input context ctx, type `ty1` is a subtype of `ty2`
-fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingError, Context)> {
+fn subtype(
+    ty1: Type<VarId>,
+    ty2: Type<VarId>,
+    mut ctx: Context,
+) -> Result<Context, (CheckingError, Context)> {
     println!(
         "{} have {ty1} be a subtype of {ty2} under Context {ctx}",
         "-".repeat(ctx.indent())
@@ -543,12 +547,12 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
                 ))
             }
         }
-        (Type::Function(arg_a1, arg_a2), Type::Function(ref arg_b1, ref arg_b2)) => {
+        (Type::Function(arg_a1, arg_a2), Type::Function(arg_b1, arg_b2)) => {
             println!("{:>20}", "<:->");
-            let theta = subtype(*arg_b1.clone(), *arg_a1, ctx)?;
+            let theta = subtype(*arg_b1, *arg_a1, ctx)?;
             let delta = subtype(
                 apply_context(&theta, *arg_a2),
-                apply_context(&theta, *arg_b2.clone()),
+                apply_context(&theta, *arg_b2),
                 theta,
             );
             return delta;
@@ -613,12 +617,10 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
             Err((CheckingError::AllOptionsFailed(errs), duped_gamma))
         }
         // If a function returns a type variable, then it is ceartainly polymorphic
-        (a, Type::Quantification(ref name, ref b)) => {
+        (a, Type::Quantification(name, b)) => {
             println!("{:>20}", "<:∀R");
-            let extendet_gamma = ctx
-                .mark_scope()
-                .extend(ContextElement::Variable(name.clone()));
-            let delta = subtype(a, *b.clone(), extendet_gamma)?.drop_scope();
+            let extendet_gamma = ctx.mark_scope().extend(ContextElement::Variable(name));
+            let delta = subtype(a, *b, extendet_gamma)?.drop_scope();
             return Ok(delta);
         }
         // If a function takes a type variable, then it might be restricted by it's callers
@@ -627,9 +629,9 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
             let alpha_hat = ctx.fresh_existential();
             let extendet_gamma = ctx
                 .mark_scope()
-                .extend(ContextElement::Existential(alpha_hat.clone()));
+                .extend(ContextElement::Existential(alpha_hat));
             let delta = subtype(
-                substitute_existential(&name, &Type::Variable(alpha_hat), a),
+                substitute_existential(&name, Type::Variable(alpha_hat), a),
                 *b,
                 extendet_gamma,
             )?
@@ -656,12 +658,8 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
             }
             Err((CheckingError::AllOptionsFailed(errs), duped_gamma))
         }
-        (Type::Existential(alpha_hat), ty) => {
-            ctx.instantiate(alpha_hat.clone(), ty, Direction::Left)
-        }
-        (ty, Type::Existential(ref alpha_hat)) => {
-            ctx.instantiate(alpha_hat.clone(), ty, Direction::Right)
-        }
+        (Type::Existential(alpha_hat), ty) => ctx.instantiate(alpha_hat, ty, Direction::Left),
+        (ty, Type::Existential(ref alpha_hat)) => ctx.instantiate(*alpha_hat, ty, Direction::Right),
         (a, b) => Err((CheckingError::TypeMissmatch(a, b), ctx)),
     };
 
@@ -672,7 +670,7 @@ fn subtype(ty1: Type, ty2: Type, mut ctx: Context) -> Result<Context, (CheckingE
 }
 
 /// FV(A)
-fn occurs_check(alpha_hat: &VarId, ty: &Type) -> bool {
+fn occurs_check(alpha_hat: &VarId, ty: &Type<VarId>) -> bool {
     match ty {
         Type::Unit | Type::BaseType(_) => false,
         Type::Variable(a) | Type::Existential(a) => a == alpha_hat,
@@ -680,42 +678,42 @@ fn occurs_check(alpha_hat: &VarId, ty: &Type) -> bool {
         Type::Function(a, b) => occurs_check(alpha_hat, a) || occurs_check(alpha_hat, b),
         Type::HigherKinded(_, generics, open) => generics
             .iter()
-            .any(|ty| ty.clone().is_some_and(|ref ty| occurs_check(alpha_hat, ty))),
+            .any(|ty| ty.as_ref().is_some_and(|ty| occurs_check(alpha_hat, ty))),
         Type::Product(vec) => vec.iter().any(|ty| occurs_check(alpha_hat, ty)),
         Type::Sum(vec) => vec.iter().any(|ty| occurs_check(alpha_hat, ty)),
     }
 }
 /// substitutes all occurances of one existential `alpha_hat` with concrete type `alpha` in `ty`
-fn substitute_existential(alpha_hat: &VarId, alpha: &Type, ty: Type) -> Type {
+fn substitute_existential(alpha_hat: &VarId, alpha: Type<VarId>, ty: Type<VarId>) -> Type<VarId> {
     match ty {
         Type::Unit => Type::Unit,
         Type::BaseType(_) => ty,
         Type::Variable(ref var) => {
             if var == alpha_hat {
-                alpha.clone()
+                alpha
             } else {
                 ty
             }
         }
         Type::Existential(ref beta_hat) => {
             if *alpha_hat == *beta_hat {
-                alpha.clone()
+                alpha
             } else {
                 ty
             }
         }
         Type::Quantification(a, b) => {
             if *alpha_hat == a {
-                Type::Quantification(a.clone(), Box::new(Type::Quantification(a, b)))
+                Type::Quantification(a, Box::new(Type::Quantification(a, b)))
             } else {
                 Type::Quantification(
-                    a.clone(),
+                    a,
                     Box::new(substitute_existential(alpha_hat, alpha, *b.clone())),
                 )
             }
         }
         Type::Function(a, b) => Type::Function(
-            Box::new(substitute_existential(alpha_hat, alpha, *a)),
+            Box::new(substitute_existential(alpha_hat, alpha.clone(), *a)),
             Box::new(substitute_existential(alpha_hat, alpha, *b)),
         ),
         Type::HigherKinded(name, ty, open) => Type::HigherKinded(
@@ -723,7 +721,7 @@ fn substitute_existential(alpha_hat: &VarId, alpha: &Type, ty: Type) -> Type {
             ty.into_iter()
                 .map(|a| {
                     if let Some(ty) = a {
-                        Some(substitute_existential(alpha_hat, alpha, ty))
+                        Some(substitute_existential(alpha_hat, alpha.clone(), ty))
                     } else {
                         a
                     }
@@ -733,17 +731,17 @@ fn substitute_existential(alpha_hat: &VarId, alpha: &Type, ty: Type) -> Type {
         ),
         Type::Product(vec) => Type::Product(
             vec.into_iter()
-                .map(|ty| substitute_existential(alpha_hat, alpha, ty))
+                .map(|ty| substitute_existential(alpha_hat, alpha.clone(), ty))
                 .collect(),
         ),
         Type::Sum(vec) => Type::Sum(
             vec.into_iter()
-                .map(|ty| substitute_existential(alpha_hat, alpha, ty))
+                .map(|ty| substitute_existential(alpha_hat, alpha.clone(), ty))
                 .collect(),
         ),
     }
 }
-fn apply_context(ctx: &Context, ty: Type) -> Type {
+fn apply_context(ctx: &Context, ty: Type<VarId>) -> Type<VarId> {
     match ty {
         /// [Γ]1 = 1
         unit @ (Type::Unit | Type::BaseType(_)) => unit,
@@ -760,8 +758,8 @@ fn apply_context(ctx: &Context, ty: Type) -> Type {
         ),
         /// [Γ[`α_hat``α_hat`at = `α_hat`        
         /// [Γ[`α_hat` = τ`α_hat` = `α_hat`= τ]]τ
-        Type::Existential(ref alpha_hat) => ctx
-            .get_solved(alpha_hat)
+        Type::Existential(alpha_hat) => ctx
+            .get_solved(&alpha_hat)
             .map_or(ty, |tau| apply_context(ctx, tau.clone())),
         Type::HigherKinded(name, ty, open) => Type::HigherKinded(
             name,
@@ -811,8 +809,8 @@ fn lambda() -> Result<(), CheckingError> {
     assert_eq!(
         apply_context(&omega, ty),
         Type::Function(
-            Type::Existential("t0".into()).into(),
-            Type::Existential("t0".into()).into()
+            Type::Existential(VarId(1)).into(),
+            Type::Existential(VarId(1)).into()
         )
     );
     Ok(())

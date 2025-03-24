@@ -5,31 +5,31 @@ use std::{
     mem::{self, transmute},
 };
 
-use crate::VarId;
+use crate::{TyId, VarId};
 
 pub(crate) enum Ast<Var> {
     Variable(Var),
     Unit,
     Abstraction(Var, Box<Self>),
     Application(Box<Self>, Box<Self>),
-    Annotation(Box<Self>, Box<Type>),
+    Annotation(Box<Self>, Box<Type<Var>>),
     Functor(String, Box<Self>),
     Let(Var, Box<Self>, Box<Self>),
     Tuple(Vec<Self>),
     LitInt(usize),
 }
-pub struct TypedVar(pub VarId, pub Type);
+pub struct TypedVar(pub VarId, pub Type<VarId>);
 /// 1 | α | ^α | ∀α. A | A →  B | (A, B) | (A | B) | F[α]
 #[derive(PartialEq, Debug, Clone, Eq)]
-pub(crate) enum Type {
+pub(crate) enum Type<Var> {
     /// 1
     Unit,
     /// α
-    Variable(VarId),
+    Variable(Var),
     /// ^α MAYBE SOLVED!!
-    Existential(VarId),
+    Existential(Var),
     /// ∀α. A
-    Quantification(VarId, Box<Self>),
+    Quantification(Var, Box<Self>),
     /// A →  B
     Function(Box<Self>, Box<Self>),
     /// Tuple (A,B,C)
@@ -47,11 +47,11 @@ pub(crate) enum ContextElement {
     /// Γ, α
     Variable(VarId),
     /// Γ, x : A
-    TypedVariable(VarId, Type),
+    TypedVariable(VarId, Type<VarId>),
     /// Γ, ^α
     Existential(VarId),
     /// Γ, ^α = τ
-    Solved(VarId, Type),
+    Solved(VarId, Type<VarId>),
 }
 /// As the context needs to be ordered, it is implemented as a simple Vector.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,12 +68,12 @@ pub(crate) enum CheckingError {
     UnannotatedVariable(VarId),
     DoubelyInitializedVariable(VarId),
     // Expected, found
-    TypeMissmatch(Type, Type),
+    TypeMissmatch(Type<VarId>, Type<VarId>),
     AllOptionsFailed(Vec<Self>),
-    InvalidInstantiation(Type, String),
-    NotWellFormed(Type),
-    MissmatchedArity(Type, Type),
-    KindMissmatch(Type, Type),
+    InvalidInstantiation(Type<VarId>, String),
+    NotWellFormed(Type<VarId>),
+    MissmatchedArity(Type<VarId>, Type<VarId>),
+    KindMissmatch(Type<VarId>, Type<VarId>),
 }
 impl fmt::Display for Context {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
@@ -99,7 +99,7 @@ impl fmt::Display for ContextElement {
     }
 }
 
-impl<T: std::fmt::Display + Clone> fmt::Display for Ast<T> {
+impl<T: std::fmt::Display> fmt::Display for Ast<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
             Ast::Unit => write!(f, "()"),
@@ -131,7 +131,12 @@ impl fmt::Display for VarId {
         write!(f, "{}", self.0)
     }
 }
-impl fmt::Display for Type {
+impl fmt::Display for TyId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+impl<T: fmt::Display> fmt::Display for Type<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
             Type::Unit => write!(f, "()"),
@@ -146,7 +151,7 @@ impl fmt::Display for Type {
                 name.as_ref().map_or("F", |v| v),
                 generics
                     .iter()
-                    .map(|a| a.clone().map_or("_".to_string(), |a| a.to_string()))
+                    .map(|a| a.as_ref().map_or("_".to_string(), |a| a.to_string()))
                     .reduce(|acc, e| acc + "," + &e)
                     .unwrap_or("_".to_string()),
                 open.then_some("..").unwrap_or_default()
@@ -186,7 +191,8 @@ impl Context {
         })
     }
 }
-impl Type {
+
+impl<T> Type<T> {
     pub fn is_monotype(&self) -> bool {
         match self {
             Type::Quantification(_, _) => false,

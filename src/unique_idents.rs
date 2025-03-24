@@ -1,4 +1,7 @@
-use crate::{VarId, types::Ast};
+use crate::{
+    VarId,
+    types::{Ast, Type},
+};
 use std::collections::{HashMap, HashSet};
 
 pub fn idents_to_ids(ast: Ast<String>) -> (Ast<VarId>, Vec<String>) {
@@ -35,6 +38,23 @@ impl VarContext {
         self.names[id.0] = name;
         (e, id)
     }
+    fn types_to_vars(&mut self, ty: Type<String>) -> Type<VarId> {
+        match ty {
+            Type::Unit => Type::Unit,
+            Type::Variable(v) => Type::Variable(self.lookup_var(&v)),
+            Type::Existential(v) => Type::Variable(self.lookup_var(&v)),
+            Type::Quantification(n, ty) => {
+                Type::Quantification(self.lookup_var(&n), Box::new(self.types_to_vars(*ty)))
+            }
+            Type::Function(a, b) => {
+                Type::Function(self.types_to_vars(*a).into(), self.types_to_vars(*b).into())
+            }
+            Type::Product(vec) => todo!(),
+            Type::Sum(vec) => todo!(),
+            Type::BaseType(_) => todo!(),
+            Type::HigherKinded(_, vec, _) => todo!(),
+        }
+    }
     fn names_to_vars(&mut self, ast: Ast<String>) -> Ast<VarId> {
         match ast {
             Ast::Variable(var) => Ast::Variable(self.lookup_var(&var)),
@@ -47,7 +67,10 @@ impl VarContext {
                 self.names_to_vars(*e1).into(),
                 self.names_to_vars(*e2).into(),
             ),
-            Ast::Annotation(e, t) => Ast::Annotation(self.names_to_vars(*e).into(), t),
+            Ast::Annotation(e, t) => Ast::Annotation(
+                self.names_to_vars(*e).into(),
+                Box::new(self.types_to_vars(*t)),
+            ),
             Ast::Functor(_, ast) => todo!(),
             Ast::Let(name, e1, e2) => {
                 let e1 = self.names_to_vars(*e1);
