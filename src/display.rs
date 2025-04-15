@@ -1,5 +1,5 @@
-use crate::Ast;
 use crate::ContextElement;
+use crate::Expr;
 use crate::TCContext;
 use crate::Type;
 use crate::TypedVar;
@@ -30,7 +30,7 @@ impl fmt::Display for ContextElement {
     }
 }
 
-impl<T: std::fmt::Display> fmt::Display for Ast<T> {
+impl<T: std::fmt::Display> fmt::Display for Expr<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match self {
             Self::Unit => write!(f, "()"),

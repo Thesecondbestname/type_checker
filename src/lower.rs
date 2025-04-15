@@ -1,25 +1,34 @@
-use std::hash::DefaultHasher;
-
-use crate::{
-    apply_context,
-    types::{Ast, TCContext, TypedVar},
-};
-
-struct Var(VarId);
-#[derive(Clone, Copy)]
+#[derive(Debug, PartialEq, Eq)]
+struct Var(VarId, Type);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VarId(usize);
+impl VarId {
+    const INCOMPARABLE: Self = Self(usize::MAX);
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Kind {
     Type,
+    Fun(Box<Kind>, Box<Kind>),
 }
+#[derive(Debug, PartialEq, Eq)]
 enum Type {
+    /// int | bool
     Base(isize),
-    Var(Var),
+    /// a
+    Var(Box<Var>),
+    /// c -> c
     Fun(Box<Self>, Box<Self>),
+    /// \(a: k). c
     TyFun(Kind, Box<Self>),
+    /// c c
+    TyApp(Box<Self>, Box<Self>),
+    /// forall (a: k). c
+    Forall(Kind, Box<Self>),
     Prod(Vec<Self>),
     Sum(Vec<Self>),
+    Kind(Kind),
 }
-
+#[derive(Debug)]
 enum SystemF {
     Var(Var),
     Int(isize),
@@ -45,28 +54,8 @@ impl LowerTypes {
     fn lookup_var(&self, id: crate::VarId) -> VarId {
         *self.type_env.get(id.0).expect("COMPILER ERRORRRR")
     }
-    fn lower_types(&mut self, ty: crate::types::Type<crate::VarId>) -> Type {
-        match ty {
-            crate::Type::Unit => Type::Base(0),
-            crate::Type::Variable(v) => Type::Var(Var(self.lookup_var(v))),
-            crate::Type::Quantification(id, ty) => {
-                let i = self.incr_index();
-                self.store_var(id, i);
-                Type::TyFun(Kind::Type, Box::new(self.lower_types(*ty)))
-            }
-            crate::Type::Function(a, b) => Type::Fun(
-                Box::new(self.lower_types(*a)),
-                Box::new(self.lower_types(*b)),
-            ),
-            crate::Type::Product(items) => {
-                Type::Prod(items.into_iter().map(|ty| self.lower_types(ty)).collect())
-            }
-            crate::Type::Sum(items) => {
-                Type::Sum(items.into_iter().map(|ty| self.lower_types(ty)).collect())
-            }
-            crate::Type::BaseType(n) => Type::Base(3),
-            crate::Type::HigherKinded(_, items, _) => todo!(),
-            _ => panic!("Unsanitized Input >:("),
-        }
-    }
 }
+// fmap :: F a -> (a -> b) -> F b
+// fmap Option a f = Option $ f a
+//
+// \F. \a. \x.

@@ -1,13 +1,6 @@
-use core::{fmt, panic};
-use std::{
-    any::TypeId,
-    fmt::Write,
-    mem::{self, transmute},
-};
+use crate::VarId;
 
-use crate::{TyId, VarId};
-
-pub enum Ast<Var> {
+pub enum Expr<Var> {
     Variable(Var),
     Unit,
     Abstraction(Var, Box<Self>),
@@ -18,21 +11,10 @@ pub enum Ast<Var> {
     Tuple(Vec<Self>),
     LitInt(usize),
 }
-pub enum IdAst<Var> {
-    Variable(VarId),
-    Unit,
-    Abstraction(VarId, Box<Self>),
-    Application(Box<Self>, Box<Self>),
-    Annotation(Box<Self>, Box<Type<Var>>),
-    Functor(String, Box<Self>),
-    Let(VarId, Box<Self>, Box<Self>),
-    Tuple(Vec<Self>),
-    LitInt(usize),
-}
 pub struct TypedVar(pub VarId, pub Type<VarId>);
 /// 1 | α | ^α | ∀α. A | A →  B | (A, B) | (A | B) | F[α]
 #[derive(PartialEq, Debug, Clone, Eq)]
-pub(crate) enum Type<Var> {
+pub enum Type<Var> {
     /// 1
     Unit,
     /// α
@@ -73,7 +55,6 @@ pub(crate) struct TCContext {
     pub ident_level: usize,
 }
 
-struct Existential(usize);
 #[derive(Debug)]
 pub(crate) enum CheckingError {
     UnannotatedVariable(VarId),
@@ -89,8 +70,8 @@ pub(crate) enum CheckingError {
 impl ContextElement {
     pub fn to_type(self) -> TypedVar {
         match self {
-            ContextElement::TypedVariable(name, ty) => TypedVar(name, ty),
-            ContextElement::Solved(name, ty) => TypedVar(name, ty),
+            Self::TypedVariable(name, ty) => TypedVar(name, ty),
+            Self::Solved(name, ty) => TypedVar(name, ty),
             _ => panic!("Context Element not solved!"),
         }
     }
@@ -100,9 +81,9 @@ impl TCContext {
         println!("{:?}", self.elements);
         self.elements.iter().all(|elem| match elem {
             ContextElement::Variable(alpha) => false,
-            ContextElement::TypedVariable(var, ty) => self.is_well_formed(&ty),
+            ContextElement::TypedVariable(var, ty) => self.is_well_formed(ty),
             ContextElement::Existential(alpha_hat) => false,
-            ContextElement::Solved(var, ty) => self.is_well_formed(&ty),
+            ContextElement::Solved(var, ty) => self.is_well_formed(ty),
         })
     }
 }

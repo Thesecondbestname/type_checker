@@ -1,17 +1,11 @@
-use crate::{
-    VarId,
-    types::{Ast, IdAst, Type},
-};
-use std::collections::{HashMap, HashSet};
-
 pub mod unique_id {
     use crate::Type;
     use crate::VarId;
     use std::collections::HashMap;
 
-    use crate::types::Ast;
+    use crate::types::Expr;
 
-    pub fn resolve_names(ast: Ast<String>) -> (Ast<VarId>, Vec<String>) {
+    pub fn resolve_names(ast: Expr<String>) -> (Expr<VarId>, Vec<String>) {
         let mut ctx = VarContext {
             vars: HashMap::new(),
             names: vec![],
@@ -45,9 +39,9 @@ pub mod unique_id {
         }
         pub(crate) fn resolve_names_shadowing(
             &mut self,
-            ast: Ast<String>,
+            ast: Expr<String>,
             name: String,
-        ) -> (Ast<VarId>, VarId) {
+        ) -> (Expr<VarId>, VarId) {
             let id = self.fresh_id(name.clone());
             let n = self.vars.insert(name.clone(), id);
             let e = self.resolve_ident_names(ast);
@@ -91,40 +85,40 @@ pub mod unique_id {
                 ),
             }
         }
-        pub(crate) fn resolve_ident_names(&mut self, ast: Ast<String>) -> Ast<VarId> {
+        pub(crate) fn resolve_ident_names(&mut self, ast: Expr<String>) -> Expr<VarId> {
             match ast {
-                Ast::Variable(var) => Ast::Variable(self.lookup_var(&var)),
-                Ast::Unit => Ast::Unit,
-                Ast::Abstraction(name, e) => {
+                Expr::Variable(var) => Expr::Variable(self.lookup_var(&var)),
+                Expr::Unit => Expr::Unit,
+                Expr::Abstraction(name, e) => {
                     let (e, id) = self.resolve_names_shadowing(*e, name);
-                    Ast::Abstraction(id, e.into())
+                    Expr::Abstraction(id, e.into())
                 }
-                Ast::Application(e1, e2) => Ast::Application(
+                Expr::Application(e1, e2) => Expr::Application(
                     self.resolve_ident_names(*e1).into(),
                     self.resolve_ident_names(*e2).into(),
                 ),
-                Ast::Annotation(e, t) => Ast::Annotation(
+                Expr::Annotation(e, t) => Expr::Annotation(
                     self.resolve_ident_names(*e).into(),
                     Box::new(self.resolve_type(*t)),
                 ),
-                Ast::Functor(n, ast) => Ast::Functor(n, self.resolve_ident_names(*ast).into()),
-                Ast::Let(name, e1, e2) => {
+                Expr::Functor(n, ast) => Expr::Functor(n, self.resolve_ident_names(*ast).into()),
+                Expr::Let(name, e1, e2) => {
                     let e1 = self.resolve_ident_names(*e1);
                     let (e2, id) = self.resolve_names_shadowing(*e2, name);
-                    Ast::Let(id, e1.into(), e2.into())
+                    Expr::Let(id, e1.into(), e2.into())
                 }
-                Ast::Tuple(asts) => Ast::Tuple(
+                Expr::Tuple(asts) => Expr::Tuple(
                     asts.into_iter()
                         .map(|e| self.resolve_ident_names(e))
                         .collect(),
                 ),
-                Ast::LitInt(i) => Ast::LitInt(i),
+                Expr::LitInt(i) => Expr::LitInt(i),
             }
         }
     }
 }
 pub mod debrujin {
-    use crate::{Type, VarId, types::Ast};
+    use crate::{Type, VarId, types::Expr};
     use std::collections::HashMap;
 
     struct VarContext {
@@ -133,7 +127,7 @@ pub mod debrujin {
         scope: usize,
         ty_scope: usize,
     }
-    pub fn resolve_names(ast: Ast<String>) -> (Ast<VarId>, Vec<String>) {
+    pub fn resolve_names(ast: Expr<String>) -> (Expr<VarId>, Vec<String>) {
         let mut ctx = VarContext {
             vars: HashMap::new(),
             names: vec![],
@@ -147,49 +141,43 @@ pub mod debrujin {
         const fn get_index(&self) -> VarId {
             VarId(self.scope)
         }
-        fn resolve_ident_names(&mut self, ast: Ast<String>) -> Ast<VarId> {
+        fn resolve_ident_names(&mut self, ast: Expr<String>) -> Expr<VarId> {
             match ast {
-                Ast::Variable(var) => Ast::Variable(self.lookup_var(&var)),
-                Ast::Unit => Ast::Unit,
+                Expr::Variable(var) => Expr::Variable(self.lookup_var(&var)),
+                Expr::Unit => Expr::Unit,
                 // \x. \y. (\z. y z ) x
                 // Fun(x, Fun(y, Call(Fun(z, Call(y, z)), x)))
                 // Fun(2, Fun(1, Call(Fun(0, Call(1, 0)), 2)))
-                Ast::Abstraction(name, e) => {
+                Expr::Abstraction(name, e) => {
                     let index = self.get_index();
                     let e = self.resolve_names_shadowing(*e, name);
                     self.incr_index();
-                    Ast::Abstraction(index, Box::new(e))
+                    Expr::Abstraction(index, Box::new(e))
                 }
-                Ast::Application(e1, e2) => {
-                    (Ast::Application(
-                        self.resolve_ident_names(*e1).into(),
-                        self.resolve_ident_names(*e2).into(),
-                    ))
-                }
-                Ast::Annotation(e, t) => {
-                    (Ast::Annotation(
-                        self.resolve_ident_names(*e).into(),
-                        Box::new(self.resolve_type(*t)),
-                    ))
-                }
-                Ast::Functor(n, ast) => (Ast::Functor(n, self.resolve_ident_names(*ast).into())),
-                Ast::Let(name, e1, e2) => {
+                Expr::Application(e1, e2) => Expr::Application(
+                    self.resolve_ident_names(*e1).into(),
+                    self.resolve_ident_names(*e2).into(),
+                ),
+                Expr::Annotation(e, t) => Expr::Annotation(
+                    self.resolve_ident_names(*e).into(),
+                    Box::new(self.resolve_type(*t)),
+                ),
+                Expr::Functor(n, ast) => (Expr::Functor(n, self.resolve_ident_names(*ast).into())),
+                Expr::Let(name, e1, e2) => {
                     self.incr_index();
                     let e1 = self.resolve_ident_names(*e1);
                     let e2 = self.resolve_names_shadowing(*e2, name);
-                    (Ast::Let(self.get_index(), e1.into(), e2.into()))
+                    Expr::Let(self.get_index(), e1.into(), e2.into())
                 }
-                Ast::Tuple(asts) => {
-                    (Ast::Tuple(
-                        asts.into_iter()
-                            .map(|e| {
-                                self.new_scope();
-                                self.resolve_ident_names(e)
-                            })
-                            .collect(),
-                    ))
-                }
-                Ast::LitInt(i) => (Ast::LitInt(i)),
+                Expr::Tuple(asts) => Expr::Tuple(
+                    asts.into_iter()
+                        .map(|e| {
+                            self.new_scope();
+                            self.resolve_ident_names(e)
+                        })
+                        .collect(),
+                ),
+                Expr::LitInt(i) => (Expr::LitInt(i)),
             }
         }
         const fn new_scope(&mut self) {
@@ -200,7 +188,7 @@ pub mod debrujin {
                 .get(var)
                 .map_or_else(|| panic!("Use of undeclared Variable {var}"), |var| *var)
         }
-        fn resolve_names_shadowing(&mut self, ast: Ast<String>, name: String) -> Ast<VarId> {
+        fn resolve_names_shadowing(&mut self, ast: Expr<String>, name: String) -> Expr<VarId> {
             let id = self.get_index();
             let n = self.vars.insert(name.clone(), id);
             let e = self.resolve_ident_names(ast);
